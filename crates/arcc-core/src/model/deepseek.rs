@@ -514,10 +514,8 @@ impl ModelProvider for DeepSeekProvider {
                         if let Some(remnant) = dsml_acc.flush() {
                             let _ = tx.send(Ok(StreamChunk::Content(remnant))).await;
                         }
-                        if let Some(remnant) = reasoning_dsml_acc.flush() {
-                            if !remnant.is_empty() {
-                                let _ = tx.send(Ok(StreamChunk::Reasoning(remnant))).await;
-                            }
+                        if let Some(remnant) = reasoning_dsml_acc.flush().filter(|r| !r.is_empty()) {
+                            let _ = tx.send(Ok(StreamChunk::Reasoning(remnant))).await;
                         }
                         continue;
                     }
@@ -543,10 +541,8 @@ impl ModelProvider for DeepSeekProvider {
                             if let Some(remnant) = dsml_acc.flush() {
                                 let _ = tx.send(Ok(StreamChunk::Content(remnant))).await;
                             }
-                            if let Some(remnant) = reasoning_dsml_acc.flush() {
-                                if !remnant.is_empty() {
-                                    let _ = tx.send(Ok(StreamChunk::Reasoning(remnant))).await;
-                                }
+                            if let Some(remnant) = reasoning_dsml_acc.flush().filter(|r| !r.is_empty()) {
+                                let _ = tx.send(Ok(StreamChunk::Reasoning(remnant))).await;
                             }
                             break;
                         }
@@ -662,13 +658,11 @@ impl ModelProvider for DeepSeekProvider {
                                 } else {
                                     debug!("dsml_acc flush clean (no remnant)");
                                 }
-                                if let Some(remnant) = reasoning_dsml_acc.flush() {
-                                    if !remnant.is_empty() {
-                                        debug!(remnant_len = remnant.len(), "reasoning_dsml_acc flush had remnant");
-                                        let _ = tx
-                                            .send(Ok(StreamChunk::Reasoning(remnant)))
-                                            .await;
-                                    }
+                                if let Some(remnant) = reasoning_dsml_acc.flush().filter(|r| !r.is_empty()) {
+                                    debug!(remnant_len = remnant.len(), "reasoning_dsml_acc flush had remnant");
+                                    let _ = tx
+                                        .send(Ok(StreamChunk::Reasoning(remnant)))
+                                        .await;
                                 }
                             }
                         }

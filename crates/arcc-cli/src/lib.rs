@@ -119,7 +119,7 @@ pub async fn run(ctx: SharedContext, prompt: &str) -> anyhow::Result<()> {
             eprintln!("\n⚡ {command}");
 
             let al = ctx.allowlist.read().await;
-            let executed = tools::execute_command(&command, &*al, skip_permissions).await;
+            let executed = tools::execute_command(&command, &al, skip_permissions).await;
             drop(al);
 
             messages.push(ChatMessage {

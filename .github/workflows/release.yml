@@ -59,6 +59,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Wait for tag to be discoverable
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          echo "Waiting for tag $TAG to be discoverable..."
+          for i in $(seq 1 10); do
+            if git ls-remote origin "refs/tags/$TAG" | grep -q .; then
+              echo "Tag $TAG is now discoverable"
+              exit 0
+            fi
+            echo "Attempt $i/10 — tag not yet discoverable, waiting 2s..."
+            sleep 2
+          done
+          echo "Tag $TAG never became discoverable"
+          exit 1
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
 

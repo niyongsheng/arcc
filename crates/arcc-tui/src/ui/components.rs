@@ -112,7 +112,7 @@ fn status_style(status: &str) -> Style {
 /// - Known commands → cyan
 /// - Unknown commands → red
 /// - Arguments after the command name → default user color
-/// Regular input (no `/` prefix) is rendered as before.
+///   Regular input (no `/` prefix) is rendered as before.
 pub fn render_input(f: &mut Frame, area: Rect, input: &str) {
     let spans = if let Some(rest) = input.strip_prefix('/') {
         // Command mode — highlight the command name

@@ -23,7 +23,7 @@ impl AuditWriter {
         let file = OpenOptions::new()
             .create(true)
             .append(true)
-            .open(&path)?;
+            .open(path)?;
 
         Ok(Self {
             inner: Mutex::new(BufWriter::new(file)),

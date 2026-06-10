@@ -89,14 +89,14 @@ impl ModelProvider for MockProvider {
             // Simulate streaming by sending chunks.
             let words: Vec<&str> = response.split_inclusive(' ').collect();
             for word in words {
-                let _ = tx.send(Ok(StreamChunk::Content(word.to_string())));
+                drop(tx.send(Ok(StreamChunk::Content(word.to_string()))));
                 tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
             }
 
-            let _ = tx.send(Ok(StreamChunk::Finish(Usage {
+            drop(tx.send(Ok(StreamChunk::Finish(Usage {
                 prompt_tokens: user_input.len() as u32 / 3,
                 completion_tokens: response.len() as u32 / 3,
-            })));
+            }))));
         });
 
         Ok(Box::new(ReceiverStream::new(rx)))

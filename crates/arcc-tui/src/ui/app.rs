@@ -424,20 +424,17 @@ impl App {
                         ConfirmChoice::AllowOnce
                     };
 
-                    match confirm_choice {
-                        ConfirmChoice::Reject => {
-                            let mut s = session.write().await;
-                            s.push_message(ChatMessage {
-                                role: "tool".into(),
-                                content: "execution rejected by user".into(),
-                                tool_calls: None,
-                                tool_call_id: Some(tc.id.clone()),
-                                reasoning_content: None,
-                            }, 0);
-                            let _ = tx.send(AppEvent::ToolExec("✗ Rejected by user".into()));
-                            continue;
-                        }
-                        _ => {}
+                    if let ConfirmChoice::Reject = confirm_choice {
+                        let mut s = session.write().await;
+                        s.push_message(ChatMessage {
+                            role: "tool".into(),
+                            content: "execution rejected by user".into(),
+                            tool_calls: None,
+                            tool_call_id: Some(tc.id.clone()),
+                            reasoning_content: None,
+                        }, 0);
+                        let _ = tx.send(AppEvent::ToolExec("✗ Rejected by user".into()));
+                        continue;
                     }
 
                     // Execute (skip_permissions=true because we already checked).
@@ -476,7 +473,7 @@ impl App {
                         })
                     } else {
                         let al = ctx.allowlist.read().await;
-                        let r = tools::execute_command(&command, &*al, true).await;
+                        let r = tools::execute_command(&command, &al, true).await;
                         drop(al);
                         r
                     };
@@ -727,20 +724,17 @@ impl App {
                         ConfirmChoice::AllowOnce
                     };
 
-                    match confirm_choice {
-                        ConfirmChoice::Reject => {
-                            let mut s = session.write().await;
-                            s.push_message(ChatMessage {
-                                role: "tool".into(),
-                                content: "execution rejected by user".into(),
-                                tool_calls: None,
-                                tool_call_id: Some(tc.id.clone()),
-                                reasoning_content: None,
-                            }, 0);
-                            let _ = tx.send(AppEvent::ToolExec("✗ Rejected by user".into()));
-                            continue;
-                        }
-                        _ => {}
+                    if let ConfirmChoice::Reject = confirm_choice {
+                        let mut s = session.write().await;
+                        s.push_message(ChatMessage {
+                            role: "tool".into(),
+                            content: "execution rejected by user".into(),
+                            tool_calls: None,
+                            tool_call_id: Some(tc.id.clone()),
+                            reasoning_content: None,
+                        }, 0);
+                        let _ = tx.send(AppEvent::ToolExec("✗ Rejected by user".into()));
+                        continue;
                     }
 
                     // Execute (skip_permissions=true because we already checked).
@@ -779,7 +773,7 @@ impl App {
                         })
                     } else {
                         let al = ctx.allowlist.read().await;
-                        let r = tools::execute_command(&command, &*al, true).await;
+                        let r = tools::execute_command(&command, &al, true).await;
                         drop(al);
                         r
                     };
@@ -927,7 +921,7 @@ impl App {
                 let result = tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current().block_on(async {
                         let al = self.ctx.allowlist.read().await;
-                        tools::execute_command(&command, &*al, true).await
+                        tools::execute_command(&command, &al, true).await
                     })
                 });
 

@@ -86,11 +86,7 @@ fn parse_invoke_blocks(body: &str) -> Vec<ToolCall> {
     let mut tool_calls = Vec::new();
     let mut remaining = body;
 
-    loop {
-        let Some(invoke_start) = remaining.find(TAG_INVOKE_PREFIX) else {
-            break;
-        };
-
+    while let Some(invoke_start) = remaining.find(TAG_INVOKE_PREFIX) {
         // Find end of this invoke tag's opening `>`.
         let tag_content_start = &remaining[invoke_start..];
         let Some(gt_pos) = tag_content_start.find('>') else {
@@ -131,11 +127,7 @@ fn parse_parameters(body: &str) -> serde_json::Value {
     let mut map = serde_json::Map::new();
     let mut remaining = body;
 
-    loop {
-        let Some(param_start) = remaining.find(TAG_PARAM_PREFIX) else {
-            break;
-        };
-
+    while let Some(param_start) = remaining.find(TAG_PARAM_PREFIX) {
         let tag_content_start = &remaining[param_start..];
         let Some(gt_pos) = tag_content_start.find('>') else {
             break;
@@ -176,12 +168,10 @@ fn parse_parameters(body: &str) -> serde_json::Value {
 
 /// Extract an attribute value from an XML-like open tag.
 /// Handles `name="value"` and `name='value'` forms.
-fn extract_attr<'a>(tag: &'a str, attr_name: &str) -> Option<String> {
+fn extract_attr(tag: &str, attr_name: &str) -> Option<String> {
     let prefix = format!("{}=", attr_name);
 
-    let Some(pos) = tag.find(&prefix) else {
-        return None;
-    };
+    let pos = tag.find(&prefix)?;
 
     let after_eq = &tag[pos + prefix.len()..];
     let quote_char = after_eq.chars().next()?;
