@@ -7,6 +7,8 @@
 [![Rust](https://img.shields.io/badge/Rust-2024-%23DEA584?logo=rust)](https://www.rust-lang.org)
 [![DeepSeek](https://img.shields.io/badge/DeepSeek-V4-%234A90D9)](https://deepseek.com)
 
+![arcc tui demo](arcc_tui_demo.gif)
+
 ---
 
 ## Running Modes
