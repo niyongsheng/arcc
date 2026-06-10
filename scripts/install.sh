@@ -38,7 +38,9 @@ case "$OS-$ARCH" in
   *)
     echo "❌ Unsupported platform: $OS $ARCH"
     echo "   Supported: macOS (arm64), Linux (x86_64)"
-    echo "   Windows users: download from GitHub Releases manually"
+    echo ""
+    echo "   💻 Windows: run the PowerShell script instead:"
+    echo "      irm https://raw.githubusercontent.com/niyongsheng/arcc/main/scripts/install.ps1 | iex"
     exit 1
     ;;
 esac
