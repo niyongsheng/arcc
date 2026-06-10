@@ -1,0 +1,56 @@
+# ARCC 主配置文件
+
+[model]
+# DeepSeek-V4 模型配置
+provider = "deepseek"
+api_base = "https://api.deepseek.com"
+# API Key 可以通过以下两种方式之一设置（优先级：api_key > 环境变量）：
+#   1. 直接在此处填写（推荐，~/.arcc/ 已在 .gitignore 中）
+#   2. 设置环境变量 DEEPSEEK_API_KEY
+# api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+api_key_env = "DEEPSEEK_API_KEY"
+
+# 双模型调度
+pro_model = "deepseek-v4-pro"       # 复杂推理 + Agent，1M 上下文，支持 tool calling
+flash_model = "deepseek-v4-flash"   # 高频对话 + 工具调用，1M 上下文，经济高效
+
+# strict 模式：强制模型工具调用遵循 JSON Schema
+# 启用后将使用 Beta endpoint (https://api.deepseek.com/beta)
+# 可有效减少 DSML 文本泄漏，推荐与 DSML 恢复层配合使用
+use_strict_mode = true
+
+# 上下文管理
+context_max_tokens = 8000            # 达到此阈值触发摘要压缩
+temperature = 0.7
+max_output_tokens = 4096
+
+[server]
+host = "127.0.0.1"
+port = 9527
+metrics_path = "/metrics"
+health_path = "/health"
+
+[feishu]
+enabled = false
+app_id = ""
+app_secret = ""
+verification_token = ""
+webhook_path = "/feishu/webhook"
+
+[safety]
+# 危险命令：执行这些命令时需要用户确认
+# 不在列表中的命令可以直接执行，无需用户确认
+require_human_confirm = ["rm", "mv", "dd", "mkfs", "shutdown", "reboot", "fdisk"]
+
+[storage]
+# SQLite 数据库路径（相对于 ~/.arcc/）
+db_path = "arcc.db"
+# 配置热重载检查间隔（秒）
+config_watch_interval = 5
+
+[logging]
+level = "info"
+# arcc 自身日志级别
+arcc_level = "debug"
+# 日志输出目录（相对于 ~/.arcc/）
+log_dir = "logs"

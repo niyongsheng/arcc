@@ -1,0 +1,56 @@
+use rusqlite::Connection;
+use tracing::info;
+
+/// Run all schema migrations (idempotent — uses `IF NOT EXISTS`).
+pub fn run(conn: &Connection) -> Result<(), rusqlite::Error> {
+    let version: i32 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
+
+    if version < 1 {
+        info!("running migration v1: create core tables");
+        conn.execute_batch(MIGRATION_V1)?;
+        conn.pragma_update(None, "user_version", 1)?;
+    }
+
+    Ok(())
+}
+
+const MIGRATION_V1: &str = r#"
+CREATE TABLE IF NOT EXISTS sessions (
+    id              TEXT PRIMARY KEY,
+    name            TEXT NOT NULL,
+    mode            TEXT NOT NULL CHECK(mode IN ('tui','cli','server','feishu')),
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    last_active_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS messages (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    role        TEXT NOT NULL CHECK(role IN ('system','user','assistant','tool')),
+    content     TEXT NOT NULL,
+    token_count INTEGER,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS summaries (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id          TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    range_start_msg_id  INTEGER NOT NULL REFERENCES messages(id),
+    range_end_msg_id    INTEGER NOT NULL REFERENCES messages(id),
+    summary_text        TEXT NOT NULL,
+    compressed_at       TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS token_usage (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    date            TEXT NOT NULL DEFAULT (date('now')),
+    session_id      TEXT NOT NULL REFERENCES sessions(id),
+    model           TEXT NOT NULL,
+    input_tokens    INTEGER NOT NULL DEFAULT 0,
+    output_tokens   INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_token_usage_date  ON token_usage(date);
+CREATE INDEX IF NOT EXISTS idx_summaries_session  ON summaries(session_id);
+"#;

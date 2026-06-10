@@ -1,0 +1,16 @@
+[package]
+name = "arcc-cli"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio.workspace = true
+portable-pty.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+futures.workspace = true
+tokio-stream.workspace = true
+serde_json.workspace = true
+arcc-core.workspace = true
+arcc-storage.workspace = true

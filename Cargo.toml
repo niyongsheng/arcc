@@ -1,0 +1,94 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/arcc-core",
+    "crates/arcc-storage",
+    "crates/arcc-server",
+    "crates/arcc-tui",
+    "crates/arcc-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = ""
+
+[workspace.dependencies]
+# --- async runtime ---
+tokio = { version = "1", features = ["full"] }
+
+# --- serialization ---
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# --- http ---
+axum = "0.8"
+reqwest = { version = "0.12", features = ["json", "stream"] }
+
+# --- cli ---
+clap = { version = "4", features = ["derive"] }
+
+# --- error handling ---
+thiserror = "2"
+anyhow = "1"
+
+# --- observability ---
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-appender = "0.2"
+metrics = "0.24"
+metrics-exporter-prometheus = "0.16"
+
+# --- storage ---
+rusqlite = { version = "0.34", features = ["bundled"] }
+toml = "0.8"
+notify = "7"
+
+# --- model ---
+tokio-stream = "0.1"
+async-trait = "0.1"
+futures = "0.3"
+
+# --- tui (optional) ---
+ratatui = "0.29"
+crossterm = "0.28"
+
+# --- cli pty ---
+portable-pty = "0.8"
+
+# --- token counting ---
+tiktoken-rs = "0.6"
+
+# --- misc ---
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+once_cell = "1"
+
+# --- internal crates ---
+arcc-core = { path = "crates/arcc-core" }
+arcc-storage = { path = "crates/arcc-storage" }
+arcc-server = { path = "crates/arcc-server" }
+arcc-tui = { path = "crates/arcc-tui" }
+arcc-cli = { path = "crates/arcc-cli" }
+
+[package]
+name = "arcc"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "arcc"
+path = "src/main.rs"
+
+[dependencies]
+arcc-core.workspace = true
+arcc-storage.workspace = true
+arcc-server.workspace = true
+arcc-tui.workspace = true
+arcc-cli.workspace = true
+tokio.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true

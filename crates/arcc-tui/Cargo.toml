@@ -1,0 +1,22 @@
+[package]
+name = "arcc-tui"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio.workspace = true
+ratatui.workspace = true
+unicode-width = "0.2"
+crossterm.workspace = true
+tracing.workspace = true
+futures.workspace = true
+tokio-stream.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+uuid.workspace = true
+serde_json.workspace = true
+arcc-core.workspace = true
+arcc-storage.workspace = true
+chrono.workspace = true
+ratatui-markdown = "0.3.6"
+tui-spinner = "0.2.3"

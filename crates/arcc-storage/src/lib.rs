@@ -1,0 +1,138 @@
+pub mod audit;
+pub mod config;
+pub mod db;
+
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use tracing::info;
+
+use crate::audit::types::AuditEvent;
+use crate::db::queries;
+use crate::db::models::{Message, Session, Summary};
+
+/// Top-level initialisation: loads config, opens DB, runs migrations.
+///
+/// The database connection is wrapped in `Arc<Mutex>` so it can be shared
+/// across threads and subsystems.
+pub struct ArccStorage {
+    pub config: config::loader::ArccConfig,
+    pub db: Arc<Mutex<rusqlite::Connection>>,
+    pub audit: audit::writer::AuditWriter,
+    /// Path to the JSONL audit file, stored so we can re-open it for reads.
+    pub audit_path: PathBuf,
+}
+
+impl ArccStorage {
+    /// Bootstrap the storage layer from the ARCC home directory.
+    pub fn init(home: &Path) -> Result<Self, StorageError> {
+        std::fs::create_dir_all(home).ok();
+
+        let config_path = home.join("config.toml");
+        let config = if config_path.exists() {
+            config::loader::load(&config_path)?
+        } else {
+            info!("no config.toml found, using defaults");
+            config::loader::ArccConfig::default()
+        };
+
+        let db_path = home.join(&config.storage.db_path);
+        let db = Arc::new(Mutex::new(
+            db::init(&db_path).map_err(StorageError::Db)?,
+        ));
+
+        let audit_path = home.join(&config.logging.log_dir).join("audit.jsonl");
+        let audit = audit::writer::AuditWriter::open(&audit_path).map_err(StorageError::Io)?;
+
+        info!("storage layer initialised");
+        Ok(Self {
+            config,
+            db,
+            audit,
+            audit_path,
+        })
+    }
+
+    // ── Query helpers for `/data` command ──────────────────────────────
+
+    /// List the most recent sessions.
+    pub fn list_sessions(&self, limit: usize) -> Result<Vec<Session>, StorageError> {
+        let conn = self.db.lock().expect("db mutex poisoned");
+        Ok(queries::list_sessions(&conn, limit)?)
+    }
+
+    /// Get messages for a session.
+    pub fn session_messages(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<Message>, StorageError> {
+        let conn = self.db.lock().expect("db mutex poisoned");
+        Ok(queries::session_messages(&conn, session_id, limit)?)
+    }
+
+    /// Token usage aggregated by day and model, for the last N days.
+    pub fn token_usage_daily(
+        &self,
+        days: usize,
+    ) -> Result<Vec<queries::TokenUsageRow>, StorageError> {
+        let conn = self.db.lock().expect("db mutex poisoned");
+        Ok(queries::token_usage_daily(&conn, days)?)
+    }
+
+    /// Total token counts for the last N days.
+    pub fn total_tokens(&self, days: usize) -> Result<(i64, i64), StorageError> {
+        let conn = self.db.lock().expect("db mutex poisoned");
+        Ok(queries::total_tokens(&conn, days)?)
+    }
+
+    /// Latest summary for a session.
+    pub fn latest_summary(&self, session_id: &str) -> Result<Option<Summary>, StorageError> {
+        let conn = self.db.lock().expect("db mutex poisoned");
+        Ok(queries::latest_summary(&conn, session_id)?)
+    }
+
+    /// Read the most recent N audit events.
+    pub fn recent_audit(&self, count: usize) -> Result<Vec<AuditEvent>, StorageError> {
+        Ok(audit::reader::read_recent(&self.audit_path, count)?)
+    }
+
+    /// Shortcut: init from the default home (`~/.arcc/`).
+    pub fn init_default() -> Result<Self, StorageError> {
+        let home = home_dir();
+        Self::init(&home)
+    }
+}
+
+fn home_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var("ARCC_HOME") {
+        return PathBuf::from(dir);
+    }
+    let base = dirs_fallback();
+    base.join(".arcc")
+}
+
+fn dirs_fallback() -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home);
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home);
+        }
+    }
+    PathBuf::from(".")
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum StorageError {
+    #[error("database error: {0}")]
+    Db(#[from] rusqlite::Error),
+    #[error("config error: {0}")]
+    Config(#[from] config::loader::ConfigError),
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+}
