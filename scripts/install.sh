@@ -7,6 +7,14 @@ set -e
 REPO="niyongsheng/arcc"
 VERSION="${1:-latest}"
 
+# Prefer Homebrew on macOS if available
+if command -v brew &>/dev/null && [ "$(uname -s)" = "Darwin" ]; then
+  echo "🍺 Homebrew detected — installing via brew formula..."
+  FORMULA_URL="https://raw.githubusercontent.com/$REPO/main/scripts/arcc.rb"
+  brew install "$FORMULA_URL" && echo "✅ Installed via Homebrew!" && arcc --help && exit 0
+  echo "⚠️  Homebrew install failed, falling back to binary download..."
+fi
+
 # Detect platform
 ARCH="$(uname -m)"
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"

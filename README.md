@@ -25,7 +25,20 @@
 curl -fsSL https://raw.githubusercontent.com/niyongsheng/arcc/main/scripts/install.sh | bash
 ```
 
-Automatically detects your platform, downloads the right binary, and installs it.
+Automatically detects your platform. On macOS, prefers Homebrew if available.
+
+### Homebrew
+
+```bash
+brew install https://raw.githubusercontent.com/niyongsheng/arcc/main/scripts/arcc.rb
+```
+
+Or if you [create a tap](https://github.com/new?repository_name=homebrew-arcc&owner=niyongsheng):
+
+```bash
+brew tap niyongsheng/arcc
+brew install arcc
+```
 
 ### Manual download
 
