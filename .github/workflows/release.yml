@@ -84,10 +84,12 @@ jobs:
           cd ../arcc-x86_64-unknown-linux-gnu && sha256sum arcc-x86_64-unknown-linux-gnu.tar.gz >> ../checksums.txt
 
       - name: Create release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            arcc-*/arcc-*.tar.gz
-            checksums.txt
-          draft: true
-          generate_release_notes: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          gh release create "$TAG" \
+            --draft \
+            --title "ARCC $TAG" \
+            --notes "ARCC $TAG 发布 — 三模态 AI Agent 底座" \
+            arcc-*/arcc-*.tar.gz checksums.txt
