@@ -42,7 +42,7 @@ pub fn command_tool_definition() -> ToolDefinition {
                                     access the real terminal."
                 }
             },
-            "required": ["command"]
+            "required": ["command", "interactive"]
         }),
         strict: false,
     }
