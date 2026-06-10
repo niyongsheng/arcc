@@ -1,0 +1,78 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            suffix: ""
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            suffix: ""
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            suffix: ""
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package binary
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf arcc-${{ matrix.target }}.tar.gz arcc
+          mv arcc-${{ matrix.target }}.tar.gz ../../../
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: arcc-${{ matrix.target }}
+          path: arcc-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
+  create-release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Generate checksums
+        run: |
+          cd arcc-x86_64-apple-darwin && sha256sum arcc-x86_64-apple-darwin.tar.gz >> ../checksums.txt
+          cd ../arcc-aarch64-apple-darwin && sha256sum arcc-aarch64-apple-darwin.tar.gz >> ../checksums.txt
+          cd ../arcc-x86_64-unknown-linux-gnu && sha256sum arcc-x86_64-unknown-linux-gnu.tar.gz >> ../checksums.txt
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            arcc-*/arcc-*.tar.gz
+            checksums.txt
+          draft: true
+          generate_release_notes: true
