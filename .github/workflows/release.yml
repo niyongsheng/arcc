@@ -100,8 +100,8 @@ jobs:
             -f "tag_name=$TAG" \
             -f "name=ARCC $TAG" \
             -f "body=ARCC $TAG Release — Three-in-One Personal AI Assistant" \
-            -f "draft=true" \
-            -f "generate_release_notes=true")
+            -F "draft=true" \
+            -F "generate_release_notes=true")
 
           RELEASE_ID=$(echo "$RELEASE_JSON" | jq -r '.id')
           UPLOAD_URL=$(echo "$RELEASE_JSON" | jq -r '.upload_url' | sed 's/{?name,label}//')

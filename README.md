@@ -63,23 +63,6 @@ flowchart TB
     Tools --> MCP["MCP Plugins<br/>Model Context Protocol"]
 ```
 
-## Tech Stack
-
-| Category | Technology |
-|----------|-----------|
-| **Language** | Rust 2024 edition |
-| **Runtime** | tokio (async, multi-threaded) |
-| **TUI** | ratatui 0.29 + crossterm 0.28 + tui-spinner 0.2 |
-| **Markdown Rendering** | ratatui-markdown 0.3.6 |
-| **HTTP (Server Mode)** | axum |
-| **HTTP Client** | reqwest |
-| **CLI Parsing** | clap (derive) |
-| **Serialization** | serde + serde_json |
-| **Observability** | tracing + tracing-appender + metrics-exporter-prometheus |
-| **Storage** | rusqlite (bundled), TOML, JSON Lines |
-| **Token Counting** | tiktoken-rs |
-| **Error Handling** | thiserror (libraries) + anyhow (binaries) |
-
 ## License
 
 MIT
