@@ -2,7 +2,7 @@
 
 # ARCC
 
-**ARCC (AI Rust Claude CLI)** — A tri-mode AI agent powered by **DeepSeek-V4**, built with **Rust**.
+**ARCC (AI Rust Claude CLI)** — Three-in-One Personal AI Assistant.
 
 [![Rust](https://img.shields.io/badge/Rust-2024-%23DEA584?logo=rust)](https://www.rust-lang.org)
 [![DeepSeek](https://img.shields.io/badge/DeepSeek-V4-%234A90D9)](https://deepseek.com)
