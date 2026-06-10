@@ -19,14 +19,8 @@
 
 ## Installation
 
-### macOS / Linux
 ```bash
 curl -fsSL https://raw.githubusercontent.com/niyongsheng/arcc/main/scripts/install.sh | bash
-```
-
-### Windows (PowerShell)
-```powershell
-irm https://raw.githubusercontent.com/niyongsheng/arcc/main/scripts/install.ps1 | iex
 ```
 
 Create `~/.arcc/config.toml` with your DeepSeek API key:
