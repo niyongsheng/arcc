@@ -91,8 +91,31 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
-          gh release create "$TAG" \
-            --draft \
-            --title "ARCC $TAG" \
-            --notes "ARCC $TAG Release — Three-in-One Personal AI Assistant" \
-            arcc-*/arcc-*.tar.gz checksums.txt
+          echo "Creating release for $TAG..."
+
+          # Create the release via API for reliability with tag eventual consistency
+          RELEASE_JSON=$(gh api \
+            --method POST \
+            "repos/${{ github.repository }}/releases" \
+            -f "tag_name=$TAG" \
+            -f "name=ARCC $TAG" \
+            -f "body=ARCC $TAG Release — Three-in-One Personal AI Assistant" \
+            -f "draft=true" \
+            -f "generate_release_notes=true")
+
+          RELEASE_ID=$(echo "$RELEASE_JSON" | jq -r '.id')
+          UPLOAD_URL=$(echo "$RELEASE_JSON" | jq -r '.upload_url' | sed 's/{?name,label}//')
+          echo "Release created: ID=$RELEASE_ID"
+
+          # Upload assets
+          for asset in arcc-*/arcc-*.tar.gz checksums.txt; do
+            echo "Uploading $asset..."
+            gh api \
+              --method POST \
+              "$UPLOAD_URL" \
+              -f "name=$(basename "$asset")" \
+              --input "$asset" \
+              --header "Content-Type: application/octet-stream" \
+              -H "Accept: application/vnd.github+json" > /dev/null
+          done
+          echo "All assets uploaded successfully!"
