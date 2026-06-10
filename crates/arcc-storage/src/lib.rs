@@ -112,17 +112,11 @@ fn home_dir() -> PathBuf {
 }
 
 fn dirs_fallback() -> PathBuf {
-    #[cfg(target_os = "macos")]
+    // macOS / Linux: $HOME, Windows: %USERPROFILE%
+    if let Ok(home) = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
     {
-        if let Ok(home) = std::env::var("HOME") {
-            return PathBuf::from(home);
-        }
-    }
-    #[cfg(target_os = "linux")]
-    {
-        if let Ok(home) = std::env::var("HOME") {
-            return PathBuf::from(home);
-        }
+        return PathBuf::from(home);
     }
     PathBuf::from(".")
 }

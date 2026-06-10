@@ -21,11 +21,24 @@ OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 
 case "$OS-$ARCH" in
   darwin-arm64)  TARGET="aarch64-apple-darwin" ;;
-  darwin-x86_64) TARGET="x86_64-apple-darwin" ;;
+  darwin-x86_64)
+    echo "ℹ️  Intel Mac: building from source..."
+    if command -v cargo &>/dev/null; then
+      git clone https://github.com/niyongsheng/arcc.git /tmp/arcc-build
+      cd /tmp/arcc-build && cargo build --release && sudo mv target/release/arcc /usr/local/bin/
+      rm -rf /tmp/arcc-build
+      echo "✅ Built from source!"
+      arcc --help && exit 0
+    else
+      echo "❌ Intel Mac: install Rust first: https://rustup.rs"
+      exit 1
+    fi
+    ;;
   linux-x86_64)  TARGET="x86_64-unknown-linux-gnu" ;;
   *)
     echo "❌ Unsupported platform: $OS $ARCH"
-    echo "   Supported: macOS (arm64/x86_64), Linux (x86_64)"
+    echo "   Supported: macOS (arm64), Linux (x86_64)"
+    echo "   Windows users: download from GitHub Releases manually"
     exit 1
     ;;
 esac
