@@ -30,23 +30,24 @@ case "$OS-$ARCH" in
     ;;
 esac
 
-# Resolve version to a tag
+# Build download URL (use `/latest/download` to avoid API rate limits)
 if [ "$VERSION" = "latest" ]; then
-  TAG=$(curl -sS "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | cut -d'"' -f4)
-  [ -z "$TAG" ] && { echo "❌ Failed to resolve latest version"; exit 1; }
+  URL="https://github.com/$REPO/releases/latest/download/arcc-$TARGET.tar.gz"
 else
-  TAG="$VERSION"
+  URL="https://github.com/$REPO/releases/download/$VERSION/arcc-$TARGET.tar.gz"
 fi
 
-echo "⬇️  Downloading ARCC $TAG ($TARGET) ..."
-
-URL="https://github.com/$REPO/releases/download/$TAG/arcc-$TARGET.tar.gz"
+echo "⬇️  Downloading ARCC ($TARGET) ..."
 TMP_DIR=$(mktemp -d)
 trap "rm -rf $TMP_DIR" EXIT
 
+# Download and extract
 curl -sL "$URL" | tar xz -C "$TMP_DIR"
 BINARY="$TMP_DIR/arcc"
 [ ! -f "$BINARY" ] && { echo "❌ Download failed"; exit 1; }
+
+# Extract version tag from redirect (HEAD request, lightweight)
+TAG=$(curl -sLI -o /dev/null -w '%{url_effective}' "$URL" 2>/dev/null | sed 's|.*/download/||;s|/arcc-.*||' || echo "")
 
 # Install — try /usr/local/bin first, fallback to ~/.local/bin
 if [ -w /usr/local/bin ]; then
