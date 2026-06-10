@@ -19,33 +19,24 @@
 
 ## Installation
 
-### Download binary (recommended)
+### One-line install (recommended)
 
-Download the latest release for your platform from [GitHub Releases](https://github.com/niyongsheng/arcc/releases):
+```bash
+curl -fsSL https://raw.githubusercontent.com/niyongsheng/arcc/main/scripts/install.sh | bash
+```
+
+Automatically detects your platform, downloads the right binary, and installs it.
+
+### Manual download
 
 ```bash
 # macOS Apple Silicon
 curl -sL https://github.com/niyongsheng/arcc/releases/latest/download/arcc-aarch64-apple-darwin.tar.gz | tar xz
 sudo mv arcc /usr/local/bin/
 
-# macOS Intel
-curl -sL https://github.com/niyongsheng/arcc/releases/latest/download/arcc-x86_64-apple-darwin.tar.gz | tar xz
-sudo mv arcc /usr/local/bin/
-
 # Linux
 curl -sL https://github.com/niyongsheng/arcc/releases/latest/download/arcc-x86_64-unknown-linux-gnu.tar.gz | tar xz
 sudo mv arcc /usr/local/bin/
-```
-
-### Build from source
-
-Requires [Rust](https://rustup.rs/) 2024 edition.
-
-```bash
-git clone https://github.com/niyongsheng/arcc.git
-cd arcc
-cargo build --release
-sudo mv target/release/arcc /usr/local/bin/
 ```
 
 ### Configuration
@@ -58,19 +49,6 @@ api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 ```
 
 See [config/config.toml](config/config.toml) for all available options.
-
-## Quick Start
-
-```bash
-cargo run -- tui
-```
-
-Build individual crates as needed:
-
-```bash
-cargo build -p arcc-core     # Core engine only
-cargo build -p arcc-tui      # TUI only
-```
 
 ## Architecture
 
