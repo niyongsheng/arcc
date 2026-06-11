@@ -76,7 +76,32 @@ cat access.log | arcc cli "统计返回 500 的请求占比"
 # 代码生成
 arcc cli "写一个 Rust 的 LRU Cache 实现" > lru.rs
 
-# Claude Code 集成
-# 在 CLAUDE.md 中添加：
-# 你可以使用 arcc cli --json --unsafe 来执行 shell 操作
 ```
+
+### Claude Code / MCP 集成
+
+ARCC CLI 可以通过 MCP 协议注册为 Claude Code 的工具，让 Claude
+直接通过自然语言执行 shell 命令。
+
+```
+你: 检查磁盘使用情况
+→ Claude 自动调用 arcc 工具
+→ arcc cli --json "检查磁盘使用情况"
+→ JSON 结果返回给 Claude → 回复你
+```
+
+**配置方式**：在 `~/.claude/settings.json` 中添加：
+
+```json
+{
+  "mcpServers": {
+    "arcc": {
+      "type": "stdio",
+      "command": "/path/to/arcc/bin/arcc-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+详见 [ARCC CLI MCP Skill](skills/arcc-cli-skill.md)。
