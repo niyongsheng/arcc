@@ -2,6 +2,7 @@ use std::sync::Arc;
 use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    event::{EnableBracketedPaste, DisableBracketedPaste},
 };
 use ratatui::layout::Position;
 use futures::StreamExt;
@@ -1526,6 +1527,7 @@ pub async fn run(ctx: SharedContext) -> anyhow::Result<()> {
     let mut stdout = std::io::stdout();
     enable_raw_mode()?;
     execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnableBracketedPaste)?;
     let mut terminal = Terminal::new(ratatui::backend::CrosstermBackend::new(stdout))?;
 
     let (tx, rx) = crate::event::loop_event::create_event_loop();
@@ -1745,6 +1747,7 @@ pub async fn run(ctx: SharedContext) -> anyhow::Result<()> {
     }
 
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(terminal.backend_mut(), DisableBracketedPaste)?;
     disable_raw_mode()?;
     Ok(())
 }

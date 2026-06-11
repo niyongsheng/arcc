@@ -66,16 +66,16 @@ pub fn spawn_input_handler(tx: mpsc::UnboundedSender<AppEvent>) -> tokio::task::
                         KeyCode::Esc => {
                             let _ = tx.send(AppEvent::Dismiss);
                         }
-                        KeyCode::Char('\n') | KeyCode::Char('\r') => {
-                            // Pasted text may contain embedded newlines.
-                            // Only actual KeyCode::Enter triggers submission;
-                            // literal \n/\r from paste are just ignored.
-                        }
                         KeyCode::Char(ch) => {
                             let _ = tx.send(AppEvent::Input(ch.to_string()));
                         }
                         _ => {}
                     }
+                }
+                Ok(CrosstermEvent::Paste(content)) => {
+                    // Bracketed paste: send entire pasted content as one event.
+                    // Embedded \n are part of the text, not Enter key presses.
+                    let _ = tx.send(AppEvent::Input(content));
                 }
                 Ok(CrosstermEvent::Resize(cols, rows)) => {
                     let _ = tx.send(AppEvent::Resize { cols, rows });
