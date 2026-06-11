@@ -192,6 +192,8 @@ impl App {
                 self.tab_active = false;
             }
             AppEvent::Prompt(req) => {
+                self.messages.push(req.message.clone());
+                self.messages.push(req.hint.clone());
                 self.pending_prompt = Some(req);
                 self.status = "waiting...".into();
             }
