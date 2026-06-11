@@ -8,9 +8,10 @@ use ratatui::{
     },
     Frame,
 };
-use ratatui_markdown::markdown::MarkdownRenderer;
+use ratatui_markdown::markdown::{MarkdownRenderer, RenderHooks};
 use ratatui_markdown::theme::ThemeConfig;
 use ratatui_markdown::highlight::{HighlightHooks, TreeSitterHighlighter};
+use ratatui_markdown::tree::{CollapsibleTree, KeyStyle};
 use std::sync::{Arc, LazyLock};
 use tui_spinner::FluxFrames;
 use crate::commands;
@@ -62,6 +63,45 @@ const CLR_STATUS_STREAM: Color = Color::Rgb(255, 210, 180);
 const CLR_STATUS_ERR: Color = Color::Rgb(255, 100, 100);
 
 // ---------------------------------------------------------------------------
+// TreeAwareHooks — custom RenderHooks that renders JSON/TOML code blocks
+// as collapsible trees and delegates everything else to HighlightHooks.
+// ---------------------------------------------------------------------------
+
+struct TreeAwareHooks {
+    highlight: HighlightHooks,
+    max_width: usize,
+}
+
+impl TreeAwareHooks {
+    fn new(highlighter: Arc<TreeSitterHighlighter>, max_width: usize) -> Self {
+        Self {
+            highlight: HighlightHooks::new(highlighter, max_width),
+            max_width,
+        }
+    }
+}
+
+impl RenderHooks for TreeAwareHooks {
+    fn render_code_block(&self, lang: &str, code: &str) -> Option<Vec<Line<'static>>> {
+        // JSON/TOML → collapsible tree
+        if lang == "json" || lang == "toml" {
+            let style = if lang == "json" { KeyStyle::Json } else { KeyStyle::Toml };
+            let mut tree = if lang == "json" {
+                CollapsibleTree::from_json_str(code)?
+            } else {
+                CollapsibleTree::from_toml_str(code)?
+            }
+            .with_key_style(style)
+            .with_show_root(false);
+            tree.expand_all();
+            return Some(tree.render_lines(self.max_width, &ThemeConfig::default()));
+        }
+        // Everything else → syntax highlighting via HighlightHooks
+        self.highlight.render_code_block(lang, code)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Chat renderer — ratatui-markdown
 // ---------------------------------------------------------------------------
 
@@ -98,7 +138,7 @@ pub fn render_chat(f: &mut Frame, area: Rect, messages: &[String], scroll_offset
     let renderer = {
         static HIGHLIGHTER: LazyLock<Arc<TreeSitterHighlighter>> =
             LazyLock::new(|| Arc::new(TreeSitterHighlighter::new()));
-        let hooks = HighlightHooks::new(HIGHLIGHTER.clone(), area.width as usize);
+        let hooks = TreeAwareHooks::new(HIGHLIGHTER.clone(), area.width as usize);
         MarkdownRenderer::new(area.width as usize)
             .with_render_hooks(Box::new(hooks))
     };
