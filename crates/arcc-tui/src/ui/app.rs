@@ -1311,7 +1311,7 @@ impl App {
 
 ## Common Pitfalls — Frequent gotchas this project has: flaky tests, known bugs, version requirements, OS-specific notes.
 
-## API / CLI Reference (if applicable) — Key endpoints, flags, or interfaces the AI will likely be asked about.
+## Notice — Key endpoints, flags, or interfaces the AI will likely be asked about.
 
 Write ONLY the ARCC.md content, no extra commentary, no section if it would be empty. Use clean markdown. Be specific — prefer concrete file paths, commands, and examples over generic advice."#.into(),
                             tool_calls: None, tool_call_id: None, reasoning_content: None,
