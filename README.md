@@ -13,11 +13,13 @@
 
 ## Running Modes
 
-| Mode | Command | Use Case |
-|------|---------|----------|
-| **TUI** | `arcc tui` | [TUI Agent Tool](docs/tui-tutorial.md) |
-| **CLI** | `arcc cli "<prompt>"` | [A2A pipe-friendly](docs/cli-tutorial.md) |
-| **Server** | `arcc server --daemon` | [Auto CPIS with IM](docs/server-tutorial.md) |
+| Mode | Command | Multi-Turn | Tool Call | Session Persist | Script/Pipe | IM Bot |
+|------|---------|:----------:|:---------:|:---------------:|:-----------:|:------:|
+| **TUI** | `arcc tui` | ✅ | ✅ | ✅ | — | — |
+| **CLI** | `arcc cli "<prompt>"` [doc](docs/cli-tutorial.md) | — | ✅ | — | ✅ | — |
+| **Server** | `arcc server --daemon` [doc](docs/server-tutorial.md) | ✅\* | — | ✅ | — | ✅ |
+
+> \* Server 通过 `session_id` 维持多轮上下文。
 
 ## Quick Start
 
