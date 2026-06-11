@@ -30,8 +30,6 @@ Use Markdown formatting to structure your plan clearly:
 | Links         | `[text](url)`                     | Underlined + primary    |
 | Image         | `![alt](path)`                    | Placeholder fallback    |
 | Diagrams      | ```` ```mermaid ... ``` ````      | Mermaid diagram         |
-| JSON / TOML   | ```` ```json ... ``` ````         | Collapsible tree view   |
-
 > ⚠️ **Mermaid diagrams**: The renderer uses a character-grid layout.
 > Chinese/Japanese labels (2 columns wide) will misalign the grid.
 > **Prefer English labels** in ```` ```mermaid ```` blocks for proper

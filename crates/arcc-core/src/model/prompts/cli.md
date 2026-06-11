@@ -59,8 +59,6 @@ Use Markdown formatting to structure your replies clearly:
 | Links         | `[text](url)`                     | Underlined + primary    |
 | Image         | `![alt](path)`                    | Placeholder fallback    |
 | Diagrams      | ```` ```mermaid ... ``` ````      | Mermaid diagram         |
-| JSON / TOML   | ```` ```json ... ``` ````         | Collapsible tree view   |
-
 Use **bold** for key terms and results, `` `code` `` for commands/paths,
 and ``` ```code blocks``` ``` for multi-line output.
 
