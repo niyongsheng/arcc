@@ -72,3 +72,14 @@ TUI 模式自动启用记忆功能。告诉 AI 你的信息：
 ```
 
 后续 AI 会自动记住并引用这些信息。
+
+## MCP 工具集成
+
+ARCC 本身也可以作为 Claude Code 的 MCP 工具被调用。通过 `bin/arcc-mcp` 脚本，
+Claude Code 可以通过自然语言直接执行 shell 命令。
+
+```
+Claude Code → arcc-mcp → arcc cli --json "prompt" → JSON 结果
+```
+
+详见 [ARCC CLI MCP Skill](skills/arcc-cli-skill.md)。

@@ -1,36 +1,37 @@
-# ARCC CLI Skill — Claude Code MCP 集成
+# ARCC CLI Skill — Claude Code MCP Integration
 
-将 `arcc cli` 注册为 Claude Code 的 MCP 工具，使 Claude 能直接通过自然语言执行 shell 命令。
+Register `arcc cli` as an MCP tool in Claude Code, enabling Claude to
+execute shell commands directly through natural language.
 
-## 效果
+## What It Does
 
-注册后，Claude Code 会自动多出一个 `arcc` 工具。你只需说：
+Once registered, Claude Code gains an `arcc` tool. Just say:
 
-> "检查磁盘使用情况"
-> "找出占用 80 端口的进程"
-> "把当前分支 rebase 到 main"
+> "Check disk usage"
+> "Find processes on port 80"
+> "Rebase current branch onto main"
 
-Claude 就会调用 `arcc cli` 来执行，返回结果。
+Claude will invoke `arcc cli` to execute it and return the result.
 
-## 安装
+## Setup
 
-### 1. 确保 arcc 在 PATH 中
+### 1. Verify arcc is in PATH
 
 ```bash
 which arcc
 ```
 
-如果未安装，先安装 arcc。
+If not found, install arcc first.
 
-### 2. 给 MCP 脚本执行权限
+### 2. Make the MCP script executable
 
 ```bash
 chmod +x /path/to/arcc/bin/arcc-mcp
 ```
 
-### 3. 注册到 Claude Code
+### 3. Register with Claude Code
 
-编辑 `~/.claude/settings.json`（如果不存在则创建）：
+Edit `~/.claude/settings.json` (create if it doesn't exist):
 
 ```json
 {
@@ -44,84 +45,86 @@ chmod +x /path/to/arcc/bin/arcc-mcp
 }
 ```
 
-> **注意**：`command` 必须是绝对路径，因为 Claude Code 的工作目录可能不是 arcc 项目目录。
+> **Note:** `command` must be an absolute path — Claude Code's working
+> directory may differ from the arcc project root.
 
-### 4. 重启 Claude Code
+### 4. Restart Claude Code
 
-重新打开 Claude Code，你会在 MCP 工具列表中看到 `arcc` 工具。
+Reopen Claude Code. You should see the `arcc` tool in the MCP tool list.
 
-## 工具定义
+## Tool Definition
 
-| 属性 | 值 |
-|------|-----|
-| **名称** | `arcc` |
-| **描述** | 将自然语言转换为 shell 命令并执行，返回结果 |
-| **参数 1** | `prompt` (string, 必填) — 任务描述 |
-| **参数 2** | `unsafe` (boolean, 可选) — 跳过安全限制 |
+| Property | Value |
+|----------|-------|
+| **Name** | `arcc` |
+| **Description** | Converts natural language to shell commands, executes them, and returns results |
+| **Arg 1** | `prompt` (string, required) — task description in natural language |
+| **Arg 2** | `unsafe` (boolean, optional) — skip safety allowlist for dangerous commands |
 
-### 参数说明
+### Parameter Guide
 
-**prompt**：自然语言描述你要做的事情。例如：
+**prompt**: Describe what you want to do in natural language. Examples:
 
-- `"列出 /tmp 下最大的 10 个文件"`
-- `"检查 Docker 容器状态"`
-- `"nginx 配置语法检查"`
-- `"git 查看未推送的提交"`
+- `"List the 10 largest files in /tmp"`
+- `"Check Docker container status"`
+- `"Verify nginx configuration syntax"`
+- `"Show unpushed commits"`
 
-**unsafe**：当需要执行危险命令（`rm`、`dd`、`mkfs`、`shutdown` 等）时设为 `true`。
+**unsafe**: Set to `true` when the task may involve dangerous commands
+(`rm`, `dd`, `mkfs`, `shutdown`, etc.).
 
-## 工作原理
+## How It Works
 
 ```
 Claude Code → arcc-mcp (MCP stdio server)
                   ↓
             arcc cli --json [--unsafe] "prompt"
                   ↓
-            JSON 响应 → 返回给 Claude Code
+            JSON response → returned to Claude Code
 ```
 
-`arcc-mcp` 脚本：
-1. 接收 MCP JSON-RPC 请求
-2. 调用 `arcc cli --json "prompt"` 
-3. 将 JSON 结果返回给 Claude Code
+The `arcc-mcp` script:
+1. Receives MCP JSON-RPC requests via stdin
+2. Calls `arcc cli --json "prompt"`
+3. Returns the JSON result to Claude Code
 
-## 示例
+## Examples
 
-### 系统管理
-
-```
-你: 检查内存使用情况
-→ arcc cli --json "检查内存使用情况"
-→ 返回: 总内存 16GB，已用 43% ...
-
-你: 找出占用 CPU 最高的 5 个进程
-→ arcc cli --json "找出占用CPU最高的5个进程"
-```
-
-### 文件操作（需 unsafe）
+### System Administration
 
 ```
-你: 删除 /tmp/old-logs 目录下的所有 .log 文件
-→ arcc cli --json --unsafe "删除 /tmp/old-logs 目录下的所有 .log 文件"
+You: Check memory usage
+→ arcc cli --json "Check memory usage"
+→ Result: Total 16GB, 43% used ...
+
+You: Find top 5 CPU-consuming processes
+→ arcc cli --json "Find top 5 CPU-consuming processes"
 ```
 
-### 网络诊断
+### File Operations (requires --unsafe)
 
 ```
-你: 检查网络连通性
-→ arcc cli --json "检查网络连通性"
+You: Delete all .log files in /tmp/old-logs
+→ arcc cli --json --unsafe "Delete all .log files in /tmp/old-logs"
 ```
 
-### Git 操作
+### Network Diagnostics
 
 ```
-你: 查看当前分支状态
-→ arcc cli --json "查看当前 git 分支状态"
+You: Check network connectivity
+→ arcc cli --json "Check network connectivity"
 ```
 
-## 在 CLAUDE.md 中引用
+### Git Operations
 
-在项目根目录的 `CLAUDE.md` 中添加：
+```
+You: Show current branch status
+→ arcc cli --json "Show current git branch status"
+```
+
+## Referencing in CLAUDE.md
+
+Add to your project's `CLAUDE.md`:
 
 ```markdown
 ## Available Tools
@@ -142,10 +145,15 @@ language. When you need to run terminal commands, invoke it as:
 Available as an MCP tool when registered in `~/.claude/settings.json`.
 ```
 
-## 故障排除
+## Troubleshooting
 
-**"arcc command not found"**：`arcc-mcp` 找不到 `arcc` 可执行文件。在脚本中修改 `ARCC` 变量为绝对路径，或确保 `arcc` 在 PATH 中。
+**"arcc command not found"** — The `arcc-mcp` script can't find the
+`arcc` binary. Either set the `ARCC` variable in the script to an
+absolute path, or ensure `arcc` is on your PATH.
 
-**超时**：默认 60 秒超时，复杂任务可能需要更长时间。在 `subprocess.run` 的 `timeout` 参数中调整。
+**Timeout** — The default timeout is 60 seconds. For long-running tasks,
+adjust the `timeout` parameter in `subprocess.run()` inside
+`bin/arcc-mcp`.
 
-**JSON 解析失败**：`arcc cli --json` 版本过旧，不支持 `--json` 标志。更新到 v0.3.0 以上。
+**JSON parse error** — Your `arcc cli` version is too old and doesn't
+support the `--json` flag. Upgrade to v0.3.0 or later.
