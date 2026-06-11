@@ -88,4 +88,4 @@ arcc cli --unsafe "rm -rf /tmp/cache"
 | 存储 | `arcc cli --json "最大的 10 个目录"` |
 | Git | `arcc cli "把当前分支 rebase 到 main"` |
 
-详见 [ARCC CLI Skill](skills/arcc-cli.md)。
+详见 [ARCC CLI Skill](../skills/arcc-cli.md)。

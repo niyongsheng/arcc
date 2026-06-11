@@ -364,7 +364,7 @@ arcc CLI 可以通过 MCP 协议注册为 Claude Code 的工具，让 Claude 直
 - **参数**: `prompt` (string, 必填), `unsafe` (boolean, 可选)
 - **输出**: JSON，包含 `response`(LLM回复)、`tool_calls`(执行记录)、`status`
 
-详见 [docs/skills/arcc-cli-skill.md](docs/skills/arcc-cli-skill.md)
+详见 [docs/skills/arcc-cli.md](docs/skills/arcc-cli.md)
 
 ## 关键术语
 

@@ -7,7 +7,7 @@
 [![Rust](https://img.shields.io/badge/Rust-2024-%23DEA584?logo=rust)](https://www.rust-lang.org)
 [![DeepSeek](https://img.shields.io/badge/DeepSeek-V4-%234A90D9)](https://deepseek.com)
 
-![arcc tui demo](arcc_tui_demo.gif)
+![arcc tui demo](docs/arcc_tui_demo.gif)
 
 ---
 
@@ -15,9 +15,9 @@
 
 | Mode | Command | Multi-Turn | Tool Call | Session Persist | Script/Pipe | IM Bot |
 |------|---------|:----------:|:---------:|:---------------:|:-----------:|:------:|
-| **TUI** | `arcc tui` [doc](docs/tui-tutorial.md) | ✅ | ✅ | ✅ | — | — |
-| **CLI** | `arcc cli "<prompt>"` [doc](docs/cli-tutorial.md) | — | ✅ | — | ✅ | — |
-| **Server** | `arcc server --daemon` [doc](docs/server-tutorial.md) | ✅\* | — | ✅ | — | ✅ |
+| **TUI** | `arcc tui` [doc](docs/tutorial/tui-tutorial.md) | ✅ | ✅ | ✅ | — | — |
+| **CLI** | `arcc cli "<prompt>"` [doc](docs/tutorial/cli-tutorial.md) | — | ✅ | — | ✅ | — |
+| **Server** | `arcc server --daemon` [doc](docs/tutorial/server-tutorial.md) | ✅\* | — | ✅ | — | ✅ |
 
 > \* Server 通过 `session_id` 维持多轮上下文。
 
