@@ -56,9 +56,6 @@ pub struct App {
     /// Non-None when the user is being prompted for input.
     /// Used by cow confirm, /init overwrite, and any future y/n prompts.
     pub pending_prompt: Option<PromptRequest>,
-    /// True when pending_prompt is from /init overwrite — main loop
-    /// re-triggers init generation on "y".
-    pub pending_init_overwrite: bool,
 
     /// Submitted prompts for ↑/↓ navigation.
     input_history: Vec<String>,
@@ -113,7 +110,6 @@ impl App {
             reasoning_content: String::new(),
             scroll_offset: 0,
             pending_prompt: None,
-            pending_init_overwrite: false,
             input_history: Vec::new(),
             history_index: 0,
             completion_candidates: Vec::new(),
@@ -1230,9 +1226,34 @@ impl App {
                     .unwrap_or_else(|| cwd.to_string_lossy().to_string());
                 let path = std::path::Path::new(&root).join("ARCC.md");
                 if path.exists() {
-                    self.messages.push("🤖 ARCC.md already exists. Overwrite with fresh analysis? (y/n)".into());
-                    self.status = "waiting...".into();
-                    self.pending_init_overwrite = true;
+                    let (resp_tx, resp_rx) = oneshot::channel();
+                    let _ = self.event_tx.send(AppEvent::Prompt(PromptRequest {
+                        message: "🤖 ARCC.md already exists. Overwrite with fresh analysis?".into(),
+                        hint: "**y** yes · **n** no".into(),
+                        response_tx: resp_tx,
+                    }));
+                    // Spawn a task to await the response.
+                    let ctx = self.ctx.clone();
+                    let tx = self.event_tx.clone();
+                    tokio::spawn(async move {
+                        if let Ok(Some(answer)) = resp_rx.await {
+                            if answer == "y" || answer == "yes" {
+                                let _ = tx.send(AppEvent::Token("🤖 Re-generating ARCC.md...".into()));
+                                let cwd = std::env::current_dir().unwrap_or_default();
+                                let root = std::process::Command::new("git")
+                                    .args(["rev-parse", "--show-toplevel"])
+                                    .output().ok()
+                                    .and_then(|o| String::from_utf8(o.stdout).ok())
+                                    .map(|s| s.trim().to_owned())
+                                    .filter(|s| !s.is_empty())
+                                    .unwrap_or_else(|| cwd.to_string_lossy().to_string());
+                                let arcc_path = std::path::Path::new(&root).join("ARCC.md");
+                                run_project_init(ctx, tx, &arcc_path, &root).await;
+                            } else {
+                                let _ = tx.send(AppEvent::Token("🤖 Kept existing ARCC.md.".into()));
+                            }
+                        }
+                    });
                     return;
                 }
 
@@ -1829,37 +1850,6 @@ pub async fn run(ctx: SharedContext) -> anyhow::Result<()> {
                         app.character_index = 0;
                         continue;
                     }
-                    // Check for pending /init overwrite question.
-                    if app.pending_init_overwrite {
-                        app.pending_init_overwrite = false;
-                        let input = app.input_buffer.trim().to_lowercase();
-                        app.input_buffer.clear();
-                        app.character_index = 0;
-                        app.status = "idle".into();
-                        if input == "y" || input == "yes" {
-                            app.messages.push("🤖 Re-generating ARCC.md...".into());
-                            drop(std::mem::replace(&mut app.input_buffer, String::new()));
-                            // Directly spawn the init task here (same logic as below).
-                            // We copy the init block inline; ideally extract to a helper.
-                            let ctx = app.ctx.clone();
-                            let tx = app.event_tx.clone();
-                            let cwd = std::env::current_dir().unwrap_or_default();
-                            let root = std::process::Command::new("git")
-                                .args(["rev-parse", "--show-toplevel"])
-                                .output().ok()
-                                .and_then(|o| String::from_utf8(o.stdout).ok())
-                                .map(|s| s.trim().to_owned())
-                                .filter(|s| !s.is_empty())
-                                .unwrap_or_else(|| cwd.to_string_lossy().to_string());
-                            let arcc_path = std::path::Path::new(&root).join("ARCC.md");
-                            tokio::spawn(async move {
-                                run_project_init(ctx, tx, &arcc_path, &root).await;
-                            });
-                        } else {
-                            app.messages.push("🤖 Kept existing ARCC.md.".into());
-                        }
-                        continue;
-                    }
                     // Check for pending generic prompt.
                     if let Some(prompt) = app.pending_prompt.take() {
                         let input = app.input_buffer.trim().to_lowercase();
@@ -1867,32 +1857,6 @@ pub async fn run(ctx: SharedContext) -> anyhow::Result<()> {
                         app.character_index = 0;
                         app.status = "idle".into();
                         let response = if input.is_empty() { None } else { Some(input) };
-                        // For init overwrite, handle separately.
-                        if app.pending_init_overwrite {
-                            app.pending_init_overwrite = false;
-                            if response.as_deref() == Some("y") || response.as_deref() == Some("yes") {
-                                app.messages.push("🤖 Re-generating ARCC.md...".into());
-                                let ctx = app.ctx.clone();
-                                let tx = app.event_tx.clone();
-                                let cwd = std::env::current_dir().unwrap_or_default();
-                                let root = std::process::Command::new("git")
-                                    .args(["rev-parse", "--show-toplevel"])
-                                    .output().ok()
-                                    .and_then(|o| String::from_utf8(o.stdout).ok())
-                                    .map(|s| s.trim().to_owned())
-                                    .filter(|s| !s.is_empty())
-                                    .unwrap_or_else(|| cwd.to_string_lossy().to_string());
-                                let arcc_path = std::path::Path::new(&root).join("ARCC.md");
-                                tokio::spawn(async move {
-                                    run_project_init(ctx, tx, &arcc_path, &root).await;
-                                });
-                            } else {
-                                app.messages.push("🤖 Kept existing ARCC.md.".into());
-                            }
-                            continue;
-                        }
-                        // Generic prompt: send response through oneshot and let the
-                        // caller (e.g. the cow confirm task in submit/plan_submit) handle it.
                         let _ = prompt.response_tx.send(response);
                         continue;
                     }
