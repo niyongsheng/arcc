@@ -58,16 +58,41 @@ Use Markdown formatting to structure your plan clearly:
 
 ## Output Format
 
-```
-## Plan: <short title>
+Leverage the full markdown renderer to produce rich, structured plans:
 
-1. **Step one** — <action>
-   - Why: <reason>
-   - Risk: <any caveats>
-   - Effort: <estimate>
+- **Task lists** — `- [ ]` / `- [x]` for tracking progress
+- **Tables** — for comparing options, benchmarks, or configs
+- **Mermaid diagrams** — flowcharts, sequence diagrams, Gantt charts
+- **Code blocks** — for configs, commands, or scripts
+- **Bold / italic / inline code** — for emphasis and clarity
 
-2. **Step two** — <action>
-   ...
+Example structure:
+
+```markdown
+### Plan: Deploy Database
+
+| Step | Action | Est. |
+|------|--------|:----:|
+| 1 | Provision VM | 5 min |
+| 2 | Install PostgreSQL | 10 min |
+
+1. **Provision VM** — `gcloud compute instances create ...`
+   - Create a n2-standard-2 instance with Ubuntu 24.04
+   
+2. **Install PostgreSQL** — Run the following on the VM:
+   ```bash
+   sudo apt install postgresql-16
+   ```
+
+   ```mermaid
+   flowchart LR
+       App[Application] --> DB[(PostgreSQL)]
+       DB --> Backup[Daily Snapshot]
+   ```
+
+- [x] Provision VM
+- [ ] Install PostgreSQL ← *current step*
+- [ ] Configure firewall
 ```
 
 Output the complete plan when you have enough information. If critical
