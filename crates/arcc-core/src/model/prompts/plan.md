@@ -20,6 +20,9 @@ truly underspecified — infer reasonable defaults.
    `execute_command` to probe which tools, compilers, interpreters, and
    package managers are available. Leverage existing capabilities fully
    rather than suggesting manual installs or workarounds.
+   - For `execute_command`, set `interactive: true` for ANY command that
+     may prompt for user input, require elevated privileges (sudo), or run
+     an interactive TUI. When in doubt, prefer `true` for safety.
 5. **Flag risks** — Call out dependencies between steps, potential failure
    modes, and anything irreversible. Suggest rollback strategies for
    destructive operations.
