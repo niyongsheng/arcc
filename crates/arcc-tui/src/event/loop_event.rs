@@ -1,15 +1,15 @@
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 
-/// User's choice when a command is blocked and needs permission.
+/// A generic user prompt. The caller awaits a response via the oneshot channel.
 #[derive(Debug)]
-pub enum ConfirmChoice {
-    /// Allow this one execution, don't save to allowlist.
-    AllowOnce,
-    /// Allow and add the command to the runtime allowlist.
-    AllowAlways,
-    /// Reject execution.
-    Reject,
+pub struct PromptRequest {
+    /// Markdown message / ASCII art to display in the chat area.
+    pub message: String,
+    /// Hint text below the message, e.g. "[y] yes · [n] no".
+    pub hint: String,
+    /// Channel to send the user's trimmed lowercase response (or None if dismissed).
+    pub response_tx: oneshot::Sender<Option<String>>,
 }
 
 /// Events that flow through the MPSC channel from input/model to the renderer.
@@ -41,12 +41,8 @@ pub enum AppEvent {
     ScrollDown(u16),
     /// Request to quit.
     Quit,
-    /// Command blocked by allowlist — user must choose AllowOnce / AllowAlways / Reject.
-    /// The tool-execution task is suspended waiting on the oneshot sender.
-    ConfirmCommand {
-        command: String,
-        tx: oneshot::Sender<ConfirmChoice>,
-    },
+    /// Generic user prompt — caller awaits a response via the oneshot.
+    Prompt(PromptRequest),
     /// Interactive command — TUI should temporarily exit, let the user interact
     /// with the command in the real terminal, then re-enter TUI.
     /// The response_tx sends back the exit code as a string.

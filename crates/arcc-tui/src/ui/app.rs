@@ -23,14 +23,7 @@ use super::components;
 use super::logo;
 use unicode_width::UnicodeWidthStr;
 
-use crate::event::loop_event::{AppEvent, ConfirmChoice};
-
-/// A command awaiting user permission, with a oneshot channel to resume the
-/// tool-execution task.
-pub struct CommandConfirm {
-    pub command: String,
-    pub response_tx: oneshot::Sender<ConfirmChoice>,
-}
+use crate::event::loop_event::{AppEvent, PromptRequest};
 
 /// TUI application state.
 pub struct App {
@@ -59,10 +52,12 @@ pub struct App {
     /// Lines to scroll the chat area upward (0 = top/auto-follow).
     pub scroll_offset: usize,
 
-    // ── Interactive permission prompt ──
-    /// Non-None when a tool task is waiting for the user to allow/reject a command.
-    pub pending_confirm: Option<CommandConfirm>,
-    /// True when /init asked about overwriting ARCC.md and awaits y/n.
+    // ── Interactive prompt ──
+    /// Non-None when the user is being prompted for input.
+    /// Used by cow confirm, /init overwrite, and any future y/n prompts.
+    pub pending_prompt: Option<PromptRequest>,
+    /// True when pending_prompt is from /init overwrite — main loop
+    /// re-triggers init generation on "y".
     pub pending_init_overwrite: bool,
 
     /// Submitted prompts for ↑/↓ navigation.
@@ -117,7 +112,7 @@ impl App {
             thinking_mode: false,
             reasoning_content: String::new(),
             scroll_offset: 0,
-            pending_confirm: None,
+            pending_prompt: None,
             pending_init_overwrite: false,
             input_history: Vec::new(),
             history_index: 0,
@@ -200,15 +195,8 @@ impl App {
                 }
                 self.tab_active = false;
             }
-            AppEvent::ConfirmCommand { command, tx } => {
-                warn!(cmd = %command, "flagged command — awaiting user confirmation");
-                self.pending_confirm = Some(CommandConfirm {
-                    command: command.clone(),
-                    response_tx: tx,
-                });
-                let sep = "‑".repeat(command.chars().count() + 2).replace('‑', "-");
-                self.messages.push(format!("```\n< {command} >\n{sep}\n  \\   ^__^\n   \\  (oo)\\_______\n      (__)\\       )\\/\\\n          ||----w |\n          ||     ||\n```"));
-                self.messages.push("**[y]** approve · **[a]** allow always · **[n]** reject".into());
+            AppEvent::Prompt(req) => {
+                self.pending_prompt = Some(req);
                 self.status = "waiting...".into();
             }
             AppEvent::ScrollUp(lines) => {
@@ -255,8 +243,8 @@ impl App {
                 self.status = "idle".into();
                 self.blink = 0;
                 self.reasoning_content.clear();
-                if let Some(pending) = self.pending_confirm.take() {
-                    let _ = pending.response_tx.send(ConfirmChoice::Reject);
+                if let Some(pending) = self.pending_prompt.take() {
+                    let _ = pending.response_tx.send(None);
                 }
                 // Trigger background context compression if session is over threshold.
                 let ctx = self.ctx.clone();
@@ -604,28 +592,35 @@ impl App {
                     let cmd_name = command.split_whitespace().next().unwrap_or(&command).to_string();
                     let _ = tx.send(AppEvent::ToolExec(format!("{command}...")));
 
-                    // Interactive permission check.
-                    let confirm_choice = if !skip_permissions {
+                    // Interactive permission check via generic Prompt.
+                    let mut rejected = false;
+                    if !skip_permissions {
                         let needs_confirm = ctx.allowlist.read().await.check(&command).unwrap_or(false);
                         if needs_confirm {
+                            let cow = format!(
+                                "```\n< {command} >\n{sep}\n  \\   ^__^\n   \\  (oo)\\_______\n      (__)\\       )\\/\\\n          ||----w |\n          ||     ||\n```",
+                                sep = "‑".repeat(command.chars().count() + 2).replace('‑', "-"),
+                            );
                             let (resp_tx, resp_rx) = oneshot::channel();
-                            let _ = tx.send(AppEvent::ConfirmCommand {
-                                command: command.clone(),
-                                tx: resp_tx,
-                            });
-                            let choice = resp_rx.await.unwrap_or(ConfirmChoice::Reject);
-                            if matches!(choice, ConfirmChoice::AllowAlways) {
-                                ctx.allowlist.write().await.approve(cmd_name);
+                            let _ = tx.send(AppEvent::Prompt(PromptRequest {
+                                message: cow,
+                                hint: "**[y]** approve · **[a]** allow always · **[n]** reject".into(),
+                                response_tx: resp_tx,
+                            }));
+                            let answer = resp_rx.await.unwrap_or(None);
+                            match answer.as_deref() {
+                                Some("a") | Some("always") => {
+                                    ctx.allowlist.write().await.approve(cmd_name);
+                                }
+                                Some("n") | Some("no") | None => {
+                                    rejected = true;
+                                }
+                                _ => {} // "y" / "yes" → proceed
                             }
-                            choice
-                        } else {
-                            ConfirmChoice::AllowOnce
                         }
-                    } else {
-                        ConfirmChoice::AllowOnce
-                    };
+                    }
 
-                    if let ConfirmChoice::Reject = confirm_choice {
+                    if rejected {
                         let mut s = session.write().await;
                         s.push_message(ChatMessage {
                             role: "tool".into(),
@@ -947,28 +942,35 @@ impl App {
                     let cmd_name = command.split_whitespace().next().unwrap_or(&command).to_string();
                     let _ = tx.send(AppEvent::ToolExec(format!("{command}...")));
 
-                    // Interactive permission check.
-                    let confirm_choice = if !skip_permissions {
+                    // Interactive permission check via generic Prompt.
+                    let mut rejected = false;
+                    if !skip_permissions {
                         let needs_confirm = ctx.allowlist.read().await.check(&command).unwrap_or(false);
                         if needs_confirm {
+                            let cow = format!(
+                                "```\n< {command} >\n{sep}\n  \\   ^__^\n   \\  (oo)\\_______\n      (__)\\       )\\/\\\n          ||----w |\n          ||     ||\n```",
+                                sep = "‑".repeat(command.chars().count() + 2).replace('‑', "-"),
+                            );
                             let (resp_tx, resp_rx) = oneshot::channel();
-                            let _ = tx.send(AppEvent::ConfirmCommand {
-                                command: command.clone(),
-                                tx: resp_tx,
-                            });
-                            let choice = resp_rx.await.unwrap_or(ConfirmChoice::Reject);
-                            if matches!(choice, ConfirmChoice::AllowAlways) {
-                                ctx.allowlist.write().await.approve(cmd_name);
+                            let _ = tx.send(AppEvent::Prompt(PromptRequest {
+                                message: cow,
+                                hint: "**[y]** approve · **[a]** allow always · **[n]** reject".into(),
+                                response_tx: resp_tx,
+                            }));
+                            let answer = resp_rx.await.unwrap_or(None);
+                            match answer.as_deref() {
+                                Some("a") | Some("always") => {
+                                    ctx.allowlist.write().await.approve(cmd_name);
+                                }
+                                Some("n") | Some("no") | None => {
+                                    rejected = true;
+                                }
+                                _ => {} // "y" / "yes" → proceed
                             }
-                            choice
-                        } else {
-                            ConfirmChoice::AllowOnce
                         }
-                    } else {
-                        ConfirmChoice::AllowOnce
-                    };
+                    }
 
-                    if let ConfirmChoice::Reject = confirm_choice {
+                    if rejected {
                         let mut s = session.write().await;
                         s.push_message(ChatMessage {
                             role: "tool".into(),
@@ -1091,8 +1093,8 @@ impl App {
             }
             "clear" => {
                 info!("session cleared");
-                if let Some(pending) = self.pending_confirm.take() {
-                    let _ = pending.response_tx.send(ConfirmChoice::Reject);
+                if let Some(pending) = self.pending_prompt.take() {
+                    let _ = pending.response_tx.send(None);
                 }
                 self.messages.clear();
                 self.reasoning_content.clear();
@@ -1858,61 +1860,43 @@ pub async fn run(ctx: SharedContext) -> anyhow::Result<()> {
                         }
                         continue;
                     }
-                    // Check for pending permission prompt first.
-                    if let Some(pending) = app.pending_confirm.take() {
+                    // Check for pending generic prompt.
+                    if let Some(prompt) = app.pending_prompt.take() {
                         let input = app.input_buffer.trim().to_lowercase();
-                        let cmd_name = pending.command.split_whitespace().next()
-                            .unwrap_or(&pending.command).to_string();
-                        let session_id = tokio::task::block_in_place(|| {
-                            tokio::runtime::Handle::current().block_on(async {
-                                app.session.read().await.id.clone()
-                            })
-                        });
-                        match input.as_str() {
-                            "a" | "always" => {
-                                let mut al = tokio::task::block_in_place(|| {
-                                    tokio::runtime::Handle::current()
-                                        .block_on(app.ctx.allowlist.write())
-                                });
-                                al.approve(cmd_name);
-                                drop(al);
-                                app.messages.push("✓ **Moo!** — added to allowlist, won't ask again".into());
-                                let _ = pending.response_tx.send(ConfirmChoice::AllowAlways);
-                                app.ctx.storage.audit.write(&AuditEvent::HumanConfirm {
-                                    ts: Utc::now().to_rfc3339(),
-                                    session: session_id,
-                                    action: format!("exec: {}", pending.command),
-                                    decision: arcc_storage::audit::types::ConfirmDecision::Approved,
-                                    user: "tui_user".into(),
-                                });
-                            }
-                            "y" | "yes" => {
-                                app.messages.push("✓ Allowed once".into());
-                                let _ = pending.response_tx.send(ConfirmChoice::AllowOnce);
-                                app.ctx.storage.audit.write(&AuditEvent::HumanConfirm {
-                                    ts: Utc::now().to_rfc3339(),
-                                    session: session_id,
-                                    action: format!("exec: {}", pending.command),
-                                    decision: arcc_storage::audit::types::ConfirmDecision::Approved,
-                                    user: "tui_user".into(),
-                                });
-                            }
-                            _ => {
-                                app.messages.push("✗ Rejected".into());
-                                let _ = pending.response_tx.send(ConfirmChoice::Reject);
-                                app.ctx.storage.audit.write(&AuditEvent::HumanConfirm {
-                                    ts: Utc::now().to_rfc3339(),
-                                    session: session_id,
-                                    action: format!("exec: {}", pending.command),
-                                    decision: arcc_storage::audit::types::ConfirmDecision::Denied,
-                                    user: "tui_user".into(),
-                                });
-                            }
-                        }
                         app.input_buffer.clear();
                         app.character_index = 0;
                         app.status = "idle".into();
-                    } else if app.show_dashboard && app.input_buffer.trim().is_empty() {
+                        let response = if input.is_empty() { None } else { Some(input) };
+                        // For init overwrite, handle separately.
+                        if app.pending_init_overwrite {
+                            app.pending_init_overwrite = false;
+                            if response.as_deref() == Some("y") || response.as_deref() == Some("yes") {
+                                app.messages.push("🤖 Re-generating ARCC.md...".into());
+                                let ctx = app.ctx.clone();
+                                let tx = app.event_tx.clone();
+                                let cwd = std::env::current_dir().unwrap_or_default();
+                                let root = std::process::Command::new("git")
+                                    .args(["rev-parse", "--show-toplevel"])
+                                    .output().ok()
+                                    .and_then(|o| String::from_utf8(o.stdout).ok())
+                                    .map(|s| s.trim().to_owned())
+                                    .filter(|s| !s.is_empty())
+                                    .unwrap_or_else(|| cwd.to_string_lossy().to_string());
+                                let arcc_path = std::path::Path::new(&root).join("ARCC.md");
+                                tokio::spawn(async move {
+                                    run_project_init(ctx, tx, &arcc_path, &root).await;
+                                });
+                            } else {
+                                app.messages.push("🤖 Kept existing ARCC.md.".into());
+                            }
+                            continue;
+                        }
+                        // Generic prompt: send response through oneshot and let the
+                        // caller (e.g. the cow confirm task in submit/plan_submit) handle it.
+                        let _ = prompt.response_tx.send(response);
+                        continue;
+                    }
+                    if app.show_dashboard && app.input_buffer.trim().is_empty() {
                         // Enter with empty input while dashboard is shown:
                         // show messages for the selected session, then close dashboard.
                         if let Some(ref data) = app.dashboard.clone() {
