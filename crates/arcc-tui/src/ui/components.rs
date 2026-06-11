@@ -145,7 +145,7 @@ impl TreeAwareHooks {
             .unwrap_or_default();
 
         Some(TreeRegistryEntry {
-            mode: TreeViewMode::Collapsed,
+            mode: TreeViewMode::Raw,
             collapsed_lines,
             expanded_lines,
             raw_lines,
