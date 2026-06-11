@@ -12,7 +12,7 @@ use arcc_core::model::registry::ProviderRegistry;
 #[command(name = "arcc", about = "AI Rust Claude CLI", version)]
 struct Cli {
     /// Bypass command allowlist (DANGEROUS: allows all shell commands)
-    #[arg(long, global = true, hide = true)]
+    #[arg(long, global = true, hide = true, alias = "unsafe")]
     dangerously_skip_permissions: bool,
 
     #[command(subcommand)]
@@ -27,6 +27,9 @@ enum Command {
     Cli {
         /// The prompt to execute (prefix with ! for raw shell command)
         prompt: Vec<String>,
+        /// Output result as a single JSON object (for programmatic use)
+        #[arg(long, default_value_t = false)]
+        json: bool,
     },
     /// Start background daemon (HTTP + Feishu)
     Server {
@@ -37,8 +40,15 @@ enum Command {
 }
 
 fn init_tracing(mode: &str) {
+    // CLI mode: quieter logging — tool output goes to stdout via print!,
+    // debug tracing from the model layer would only create noise.
+    let default_filter = if mode == "cli" {
+        "warn,arcc=info"
+    } else {
+        "info,arcc=debug"
+    };
     let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info,arcc=debug"));
+        .unwrap_or_else(|_| EnvFilter::new(default_filter));
 
     if mode == "tui" {
         let log_path = std::env::var("ARCC_LOG")
@@ -154,10 +164,10 @@ async fn main() -> anyhow::Result<()> {
             tracing::info!("starting TUI mode");
             arcc_tui::run(ctx).await?;
         }
-        Command::Cli { prompt } => {
+        Command::Cli { prompt, json } => {
             let input = prompt.join(" ");
-            tracing::info!(%input, "starting CLI mode");
-            arcc_cli::run(ctx, &input).await?;
+            tracing::info!(%input, json, "starting CLI mode");
+            arcc_cli::run(ctx, &input, json).await?;
         }
         Command::Server { daemon } => {
             tracing::info!(daemon, "starting server mode");

@@ -11,6 +11,7 @@ thiserror.workspace = true
 anyhow.workspace = true
 futures.workspace = true
 tokio-stream.workspace = true
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 arcc-core.workspace = true
 arcc-storage.workspace = true
