@@ -220,6 +220,10 @@ impl RenderHooks for TreeAwareHooks {
 ///
 /// `scroll_offset` controls how many lines the view is shifted **up** from the
 /// bottom (0 = follow newest content at the bottom).
+/// Max messages rendered per frame — beyond this, only the most recent
+/// are shown to keep parse + syntax-highlight time bounded.
+const MAX_VISIBLE_MSGS: usize = 80;
+
 pub fn render_chat(
     f: &mut Frame,
     area: Rect,
@@ -228,9 +232,16 @@ pub fn render_chat(
     tree_registry: &TreeRegistry,
     focused_tree: Option<u64>,
 ) {
+    // Only render the last N messages — older messages are dropped to
+    // keep markdown parsing and tree-sitter highlighting fast.
+    let msgs = if messages.len() > MAX_VISIBLE_MSGS {
+        &messages[messages.len() - MAX_VISIBLE_MSGS..]
+    } else {
+        messages
+    };
     let mut text = String::new();
 
-    for msg in messages {
+    for msg in msgs {
         if let Some(t) = msg.strip_prefix("🧑 ") {
             text.push_str(&format!("**│ {t}**\n\n"));
         } else if let Some(t) = msg.strip_prefix("🤖 ") {
