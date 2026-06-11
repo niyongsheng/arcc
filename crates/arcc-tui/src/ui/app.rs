@@ -560,17 +560,7 @@ impl App {
                     let words: Vec<&str> = lower.split_whitespace().collect();
                     let first = words.first().copied().unwrap_or("");
                     let auto_interactive = first == "sudo"
-                        || words.contains(&"sudo")
-                        || first == "ssh" || words.contains(&"ssh")
-                        || first == "vim" || words.contains(&"vim")
-                        || first == "nano" || words.contains(&"nano")
-                        || first == "htop" || words.contains(&"htop")
-                        || first == "top" || words.contains(&"top")
-                        || first == "less" || words.contains(&"less")
-                        || first == "more" || words.contains(&"more")
-                        || first == "passwd" || words.contains(&"passwd")
-                        || first == "telnet" || words.contains(&"telnet")
-                        || first == "mo" || words.contains(&"mo");
+                        || words.contains(&"sudo");
                     let interactive = ai_interactive.unwrap_or(auto_interactive);
                     let executed = if interactive {
                         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
@@ -900,17 +890,7 @@ impl App {
                     let words: Vec<&str> = lower.split_whitespace().collect();
                     let first = words.first().copied().unwrap_or("");
                     let auto_interactive = first == "sudo"
-                        || words.contains(&"sudo")
-                        || first == "ssh" || words.contains(&"ssh")
-                        || first == "vim" || words.contains(&"vim")
-                        || first == "nano" || words.contains(&"nano")
-                        || first == "htop" || words.contains(&"htop")
-                        || first == "top" || words.contains(&"top")
-                        || first == "less" || words.contains(&"less")
-                        || first == "more" || words.contains(&"more")
-                        || first == "passwd" || words.contains(&"passwd")
-                        || first == "telnet" || words.contains(&"telnet")
-                        || first == "mo" || words.contains(&"mo");
+                        || words.contains(&"sudo");
                     let interactive = ai_interactive.unwrap_or(auto_interactive);
                     let executed = if interactive {
                         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();

@@ -36,10 +36,14 @@ pub fn command_tool_definition() -> ToolDefinition {
                 },
                 "interactive": {
                     "type": "boolean",
-                    "description": "Set to true when the command may need interactive input \
-                                    (e.g. sudo password prompts, ssh, vim). The TUI will \
-                                    temporarily exit alternate screen and let the command \
-                                    access the real terminal."
+                    "description": "CRITICAL: Set to true for ANY command that may prompt for \
+                                    user input, require elevated privileges, or run an \
+                                    interactive TUI. Examples: sudo, ssh, vim, nano, htop, \
+                                    top, less, more, passwd, telnet, mole, package managers, \
+                                    editors, password prompts. The TUI will temporarily exit \
+                                    alternate screen and let the command access the real \
+                                    terminal. Set to false only for batch commands that run \
+                                    to completion without any prompts. When in doubt, prefer true."
                 }
             },
             "required": ["command", "interactive"]
