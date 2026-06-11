@@ -44,6 +44,11 @@ pub struct App {
     pub event_tx: mpsc::UnboundedSender<AppEvent>,
     pub ctx: SharedContext,
 
+    // ── Background AI task (streaming/thinking) ──
+    /// Handle of the currently running AI response task.
+    /// Stored so Esc can abort mid-stream.
+    pub task_handle: Option<tokio::task::JoinHandle<()>>,
+
     // ── Multi-turn conversation & thinking mode ──
     pub session: Arc<RwLock<Session>>,
     pub thinking_mode: bool,
@@ -112,6 +117,7 @@ impl App {
             completion_index: 0,
             tab_active: false,
             blink: 0,
+            task_handle: None,
             show_dashboard: false,
             dashboard: None,
             dashboard_scroll: 0,
@@ -341,7 +347,16 @@ impl App {
                 self.live_metrics.tx_rate = tx_rate;
             }
             AppEvent::Dismiss => {
-                if self.show_dashboard {
+                if self.status != "idle" {
+                    // Esc during AI response: abort the streaming task.
+                    info!("user aborted AI response");
+                    if let Some(handle) = self.task_handle.take() {
+                        handle.abort();
+                    }
+                    self.status = "idle".into();
+                    self.messages.push("🤖 _(stopped)_".into());
+                    self.blink = 0;
+                } else if self.show_dashboard {
                     debug!("dismissing dashboard");
                     self.show_dashboard = false;
                     self.dashboard_scroll = 0;
@@ -417,7 +432,7 @@ impl App {
             .chain(history_msgs)
             .collect();
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             let mut messages = initial_messages;
             let mut phase = 1;
 
@@ -635,6 +650,7 @@ impl App {
                 phase = 2;
             }
         });
+        self.task_handle = Some(handle);
     }
 
     /// Ensure a real persisted session exists (lazy creation on first input).
@@ -744,7 +760,7 @@ impl App {
 
         info!("TUI: starting multi-turn tool-calling stream");
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             let mut messages = initial_messages;
             let mut phase = 1;
 
@@ -965,6 +981,7 @@ impl App {
                 phase = 2;
             }
         });
+        self.task_handle = Some(handle);
     }
 
     /// Handle a slash command directly (no LLM).
