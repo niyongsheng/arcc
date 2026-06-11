@@ -291,9 +291,9 @@ pub fn render_chat(
 fn spinner_char(status: &str, tick: u64) -> char {
     let frames: &[char] = match status {
         status::THINKING | status::LOADING | status::PLANNING => FluxFrames::CLASSIC,
-        status::STREAMING => FluxFrames::BOUNCE,
+        status::STREAMING => FluxFrames::ORBIT,
         status::EXECUTING => FluxFrames::LINE,
-        status::COMPRESSING => FluxFrames::ORBIT,
+        status::COMPRESSING => FluxFrames::BOUNCE,
         status::WAITING => FluxFrames::DIAMOND,
         _ => return ' ',
     };
