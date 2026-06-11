@@ -158,18 +158,27 @@ impl App {
         match event {
             AppEvent::Input(ch) if ch == "\n" || ch == "\r" => {}
             AppEvent::Input(ch) if ch == "\x08" || ch == "\x7f" => {
-                self.delete_char();
+                if self.status == "idle" {
+                    self.delete_char();
+                }
             }
             AppEvent::Input(ch) if ch == "\x1b[D" => {
-                // Left arrow
-                self.character_index = self.character_index.saturating_sub(1);
+                if self.status == "idle" {
+                    self.character_index = self.character_index.saturating_sub(1);
+                }
             }
             AppEvent::Input(ch) if ch == "\x1b[C" => {
-                // Right arrow
-                let max = self.input_buffer.chars().count();
-                if self.character_index < max {
-                    self.character_index += 1;
+                if self.status == "idle" {
+                    let max = self.input_buffer.chars().count();
+                    if self.character_index < max {
+                        self.character_index += 1;
+                    }
                 }
+            }
+            AppEvent::Input(_ch) if self.status != "idle" => {
+                // AI is executing — discard stray keystrokes that may come
+                // from subprocesses writing to /dev/tty (e.g. sudo password
+                // prompts leaking through the TUI's raw-mode input handler).
             }
             AppEvent::Input(ch) => {
                 for c in ch.chars() {
