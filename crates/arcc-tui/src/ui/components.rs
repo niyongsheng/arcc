@@ -224,7 +224,9 @@ pub fn render_chat(
             text.push('\n');
             text.push('\n');
         } else if let Some(t) = msg.strip_prefix("🧠 ") {
-            text.push_str(&format!("_🧠 {t}_\n\n"));
+            // Collapse newlines so the _..._ italic span doesn't break.
+            let clean = t.replace('\n', " ");
+            text.push_str(&format!("_🧠 {clean}_\n\n"));
         } else if let Some(t) = msg.strip_prefix("⚡ ") {
             text.push_str(&format!("_⚡ {t}_\n\n"));
         } else if let Some(t) = msg.strip_prefix("⚠ ") {
