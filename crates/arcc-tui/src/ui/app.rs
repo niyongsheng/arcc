@@ -1228,9 +1228,10 @@ impl App {
                     .unwrap_or_else(|| cwd.to_string_lossy().to_string());
                 let path = std::path::Path::new(&root).join("ARCC.md");
                 if path.exists() {
+                    let cow = "```\n< Overwrite ARCC.md? >\n--------------------------\n  \\   ^__^\n   \\  (oo)\\_______\n      (__)\\       )\\/\\\n          ||----w |\n          ||     ||\n```".to_string();
                     let (resp_tx, resp_rx) = oneshot::channel();
                     let _ = self.event_tx.send(AppEvent::Prompt(PromptRequest {
-                        message: "🤖 ARCC.md already exists. Overwrite with fresh analysis?".into(),
+                        message: cow,
                         hint: "**y** yes · **n** no".into(),
                         response_tx: resp_tx,
                     }));
