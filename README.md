@@ -13,13 +13,13 @@
 
 ## Running Modes
 
-| Mode | Command | Multi-Turn | Tool Call | Session Persist | Script/Pipe | IM Bot |
-|------|---------|:----------:|:---------:|:---------------:|:-----------:|:------:|
-| **TUI** | `arcc tui` [doc](docs/tutorial/tui-tutorial.md) | ✅ | ✅ | ✅ | — | — |
-| **CLI** | `arcc cli "<prompt>"` [doc](docs/tutorial/cli-tutorial.md) | — | ✅ | — | ✅ | — |
-| **Server** | `arcc server --daemon` [doc](docs/tutorial/server-tutorial.md) | ✅\* | — | ✅ | — | ✅ |
+| Mode | Command | Multi-Turn | Memory | Tool Call | Session Persist | Script/Pipe | IM Bot |
+|------|---------|:----------:|:------:|:---------:|:---------------:|:-----------:|:------:|
+| **TUI** | `arcc tui` [doc](docs/tutorial/tui-tutorial.md) | ✅ | —¹ | ✅ | ✅ | — | — |
+| **CLI** | `arcc cli "<prompt>"` [doc](docs/tutorial/cli-tutorial.md) | — | — | ✅ | — | ✅ | — |
+| **Server** | `arcc server --daemon` [doc](docs/tutorial/server-tutorial.md) | ✅ | ✅ | — | ✅ | — | ✅ |
 
-> \* Server 通过 `session_id` 维持多轮上下文。
+> ¹ TUI 通过 `/init` 生成的 ARCC.md 提供项目级指令，而非运行时记忆。
 
 ## Quick Start
 
