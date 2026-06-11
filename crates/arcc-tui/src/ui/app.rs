@@ -38,10 +38,11 @@ pub struct App {
     pub event_tx: mpsc::UnboundedSender<AppEvent>,
     pub ctx: SharedContext,
 
-    // ── Background AI task (streaming/thinking) ──
-    /// Handle of the currently running AI response task.
-    /// Stored so Esc can abort mid-stream.
+    // ── Background task handles ──
+    /// Handle of the currently running AI response task (Esc to abort).
     pub task_handle: Option<tokio::task::JoinHandle<()>>,
+    /// Handle of the /init generation task (cancelled on new submit).
+    pub init_handle: Option<tokio::task::JoinHandle<()>>,
 
     // ── Multi-turn conversation & thinking mode ──
     pub session: Arc<RwLock<Session>>,
@@ -117,6 +118,7 @@ impl App {
             tab_active: false,
             blink: 0,
             task_handle: None,
+            init_handle: None,
             show_dashboard: false,
             dashboard: None,
             dashboard_scroll: 0,
@@ -425,6 +427,10 @@ impl App {
 
     /// Plan mode — streams a plan-focused prompt through the LLM with thinking mode enabled.
     fn plan_submit(&mut self, task: &str, tx: mpsc::UnboundedSender<AppEvent>) {
+        // Cancel any running /init generation.
+        if let Some(h) = self.init_handle.take() {
+            h.abort();
+        }
         self.ensure_session();
         self.thinking_mode = true;
         self.messages.push(format!("🧑 /plan {task}"));
@@ -729,6 +735,10 @@ impl App {
 
     /// Submit a prompt and handle the tool-calling stream loop.
     fn submit(&mut self, tx: mpsc::UnboundedSender<AppEvent>) {
+        // Cancel any running /init generation — user started a new conversation.
+        if let Some(h) = self.init_handle.take() {
+            h.abort();
+        }
         let prompt = std::mem::take(&mut self.input_buffer);
         let prompt = prompt.trim().to_owned();
         if prompt.is_empty() {
@@ -1233,7 +1243,7 @@ impl App {
                     // Spawn a task to await the response.
                     let ctx = self.ctx.clone();
                     let tx = self.event_tx.clone();
-                    tokio::spawn(async move {
+                    self.init_handle = Some(tokio::spawn(async move {
                         if let Ok(Some(answer)) = resp_rx.await {
                             if answer == "y" || answer == "yes" {
                                 let _ = tx.send(AppEvent::ToolExec("generating ARCC.md...".into()));
@@ -1251,7 +1261,7 @@ impl App {
                                 let _ = tx.send(AppEvent::Token("🤖 Kept existing ARCC.md.".into()));
                             }
                         }
-                    });
+                    }));
                     return;
                 }
 
@@ -1263,9 +1273,9 @@ impl App {
                 let tx = self.event_tx.clone();
                 let arcc_path = path.clone();
                 let root_str = root.clone();
-                tokio::spawn(async move {
+                self.init_handle = Some(tokio::spawn(async move {
                     run_project_init(ctx, tx, &arcc_path, &root_str).await;
-                });
+                }));
             }
             "exit" | "quit" => {
                 info!("user quit via command");
