@@ -62,6 +62,8 @@ pub struct App {
     // ── Interactive permission prompt ──
     /// Non-None when a tool task is waiting for the user to allow/reject a command.
     pub pending_confirm: Option<CommandConfirm>,
+    /// True when /init asked about overwriting ARCC.md and awaits y/n.
+    pub pending_init_overwrite: bool,
 
     /// Submitted prompts for ↑/↓ navigation.
     input_history: Vec<String>,
@@ -116,6 +118,7 @@ impl App {
             reasoning_content: String::new(),
             scroll_offset: 0,
             pending_confirm: None,
+            pending_init_overwrite: false,
             input_history: Vec::new(),
             history_index: 0,
             completion_candidates: Vec::new(),
@@ -1221,18 +1224,9 @@ impl App {
                     .unwrap_or_else(|| cwd.to_string_lossy().to_string());
                 let path = std::path::Path::new(&root).join("ARCC.md");
                 if path.exists() {
-                    // Already exists — just reload.
-                    match std::fs::read_to_string(&path) {
-                        Ok(content) => {
-                            tokio::task::block_in_place(|| {
-                                tokio::runtime::Handle::current().block_on(async {
-                                    *self.ctx.project_instructions.write().await = Some(content);
-                                });
-                            });
-                            self.messages.push("🤖 ARCC.md reloaded. Start a new conversation to apply.".into());
-                        }
-                        Err(e) => self.messages.push(format!("⚠ Failed to read ARCC.md: {e}")),
-                    }
+                    self.messages.push("🤖 ARCC.md already exists. Overwrite with fresh analysis? (y/n)".into());
+                    self.status = "waiting...".into();
+                    self.pending_init_overwrite = true;
                     return;
                 }
 
@@ -1243,150 +1237,9 @@ impl App {
                 let ctx = self.ctx.clone();
                 let tx = self.event_tx.clone();
                 let arcc_path = path.clone();
+                let root_str = root.clone();
                 tokio::spawn(async move {
-                    // 1. Probe the project.
-                    let _ = tx.send(AppEvent::ToolExec("probing project structure...".into()));
-                    let mut probe_parts: Vec<String> = Vec::new();
-
-                    // Directory tree (top 3 levels, capped at 200 lines).
-                    let tree_out = tokio::process::Command::new("find")
-                        .args([&root, "-maxdepth", "3", "-not", "-path", "*/target/*", "-not", "-path", "*/.git/*", "-not", "-path", "*/node_modules/*"])
-                        .output()
-                        .await
-                        .ok()
-                        .and_then(|o| String::from_utf8(o.stdout).ok())
-                        .unwrap_or_default();
-                    let tree_lines: Vec<&str> = tree_out.lines().take(200).collect();
-                    probe_parts.push(format!("## Directory Tree\n```\n{}\n```", tree_lines.join("\n")));
-
-                    // Key config files.
-                    for fname in &["Cargo.toml", "package.json", "pyproject.toml", "go.mod",
-                                    "README.md", "Makefile", "Dockerfile", ".github/workflows"] {
-                        let fpath = std::path::Path::new(&root).join(fname);
-                        if fpath.exists() {
-                            if let Ok(content) = std::fs::read_to_string(&fpath) {
-                                let truncated: String = content.chars().take(2000).collect();
-                                probe_parts.push(format!("\n## {fname}\n```\n{truncated}\n```"));
-                            }
-                        }
-                    }
-
-                    // Git log (recent activity).
-                    let log_out = tokio::process::Command::new("git")
-                        .args(["-C", &root, "log", "--oneline", "-20"])
-                        .output()
-                        .await
-                        .ok()
-                        .and_then(|o| String::from_utf8(o.stdout).ok())
-                        .unwrap_or_default();
-                    if !log_out.is_empty() {
-                        probe_parts.push(format!("\n## Recent Git History\n```\n{log_out}\n```"));
-                    }
-
-                    let probe_text = probe_parts.join("\n");
-
-                    // 2. Call the AI to generate ARCC.md.
-                    let _ = tx.send(AppEvent::Status("generating ARCC.md...".into()));
-                    let provider = ctx.providers.pick(probe_text.len(), false);
-                    let result: Result<String, String> = if let Some(prov) = provider {
-                        let init_system = arcc_core::model::types::ChatMessage {
-                            role: "system".into(),
-                            content: r#"You are a project analyst. Analyze the project and generate a concise ARCC.md optimized for AI comprehension. Structure it as follows:
-
-## Project Overview — One-paragraph elevator pitch: what, why, tech stack, target audience.
-
-## Quick Start — The minimal commands to build, test, and run (copy-paste ready).
-
-## Repo Anatomy — Top-level layout explained in 3-5 bullet points: which directory holds what, entry points.
-
-## Intelligent Conventions — Only what matters for code correctness:
-- Naming patterns, error handling idioms, async patterns used.
-- Git / PR conventions if discernible from history.
-- Testing expectations (where tests live, how to run a subset).
-
-## Design Decisions — Non-obvious things a newcomer would get wrong:
-- Why certain crates exist, why a particular library was chosen.
-- Trade-offs made, workarounds for known issues.
-- Configuration / environment variable semantics.
-
-## Common Pitfalls — Frequent gotchas this project has: flaky tests, known bugs, version requirements, OS-specific notes.
-
-## Notice — Key endpoints, flags, or interfaces the AI will likely be asked about.
-
-Write ONLY the ARCC.md content, no extra commentary, no section if it would be empty. Use clean markdown. Be specific — prefer concrete file paths, commands, and examples over generic advice."#.into(),
-                            tool_calls: None, tool_call_id: None, reasoning_content: None,
-                        };
-                        let user_msg = arcc_core::model::types::ChatMessage {
-                            role: "user".into(),
-                            content: format!("Generate an ARCC.md for this project:\n\n{probe_text}"),
-                            tool_calls: None, tool_call_id: None, reasoning_content: None,
-                        };
-                        let req = arcc_core::model::types::ChatRequest {
-                            model: prov.model_name().to_owned(),
-                            messages: vec![init_system, user_msg],
-                            tools: None,
-                            tool_choice: None,
-                            temperature: Some(0.5),
-                            max_tokens: Some(4096),
-                            stream: true,
-                            thinking_mode: None,
-                            reasoning_effort: None,
-                        };
-                        // Stream the response so the user sees content as it's generated.
-                        let mut full = String::new();
-                        let _ = tx.send(AppEvent::Token("\n\n".into()));
-                        match prov.chat_stream(req).await {
-                            Ok(stream) => {
-                                use futures::StreamExt;
-                                let mut stream = Box::pin(stream);
-                                while let Some(chunk) = stream.next().await {
-                                    match chunk {
-                                        Ok(arcc_core::model::types::StreamChunk::Content(text)) => {
-                                            full.push_str(&text);
-                                            let _ = tx.send(AppEvent::Token(text));
-                                        }
-                                        Ok(arcc_core::model::types::StreamChunk::Finish(_)) => {}
-                                        Ok(_) => {}
-                                        Err(e) => {
-                                            let _ = tx.send(AppEvent::Token(format!("\n⚠ {e}")));
-                                        }
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                let _ = tx.send(AppEvent::Token(format!("\n❌ {e}")));
-                            }
-                        }
-                        Ok(full)
-                    } else {
-                        Err("no model provider available".into())
-                    };
-
-                    // 3. Write result to ARCC.md.
-                    match result {
-                        Ok(content) => {
-                            // Strip ```md/``` fences if the AI wrapped them.
-                            let clean = content.trim()
-                                .strip_prefix("```markdown").or_else(|| content.trim().strip_prefix("```md"))
-                                .or_else(|| content.trim().strip_prefix("```"))
-                                .and_then(|s| s.strip_suffix("```"))
-                                .map(|s| s.trim())
-                                .unwrap_or(content.trim());
-                            if let Err(e) = std::fs::write(&arcc_path, clean) {
-                                let _ = tx.send(AppEvent::Token(format!("\n⚠ Failed to write ARCC.md: {e}")));
-                            } else {
-                                let _ = tx.send(AppEvent::Token(format!("\n✅ ARCC.md created at `{}`", arcc_path.display())));
-                                // Load into context.
-                                if let Ok(content) = std::fs::read_to_string(&arcc_path) {
-                                    *ctx.project_instructions.write().await = Some(content);
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            let _ = tx.send(AppEvent::Token(format!("\n❌ Failed to generate ARCC.md: {e}")));
-                        }
-                    }
-                    let _ = tx.send(AppEvent::StreamDone);
+                    run_project_init(ctx, tx, &arcc_path, &root_str).await;
                 });
             }
             "exit" | "quit" => {
@@ -1791,6 +1644,151 @@ fn get_live_net() -> (u64, u64) {
 }
 
 // ---------------------------------------------------------------------------
+// run_project_init — probe project and generate ARCC.md via AI
+// ---------------------------------------------------------------------------
+
+async fn run_project_init(ctx: SharedContext, tx: mpsc::UnboundedSender<AppEvent>, arcc_path: &std::path::Path, root: &str) {
+    let _ = tx.send(AppEvent::ToolExec("probing project structure...".into()));
+    let mut probe_parts: Vec<String> = Vec::new();
+
+    // Directory tree (top 3 levels, capped at 200 lines).
+    let tree_out = tokio::process::Command::new("find")
+        .args([root, "-maxdepth", "3", "-not", "-path", "*/target/*", "-not", "-path", "*/.git/*", "-not", "-path", "*/node_modules/*"])
+        .output()
+        .await
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .unwrap_or_default();
+    let tree_lines: Vec<&str> = tree_out.lines().take(200).collect();
+    probe_parts.push(format!("## Directory Tree\n```\n{}\n```", tree_lines.join("\n")));
+
+    // Key config files.
+    for fname in &["Cargo.toml", "package.json", "pyproject.toml", "go.mod",
+                    "README.md", "Makefile", "Dockerfile", ".github/workflows"] {
+        let fpath = std::path::Path::new(root).join(fname);
+        if fpath.exists() {
+            if let Ok(content) = std::fs::read_to_string(&fpath) {
+                let truncated: String = content.chars().take(2000).collect();
+                probe_parts.push(format!("\n## {fname}\n```\n{truncated}\n```"));
+            }
+        }
+    }
+
+    // Git log (recent activity).
+    let log_out = tokio::process::Command::new("git")
+        .args(["-C", root, "log", "--oneline", "-20"])
+        .output()
+        .await
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .unwrap_or_default();
+    if !log_out.is_empty() {
+        probe_parts.push(format!("\n## Recent Git History\n```\n{log_out}\n```"));
+    }
+
+    let probe_text = probe_parts.join("\n");
+
+    // Call the AI to generate ARCC.md.
+    let _ = tx.send(AppEvent::Status("generating ARCC.md...".into()));
+    let provider = ctx.providers.pick(probe_text.len(), false);
+    let init_system_content = r#"You are a project analyst. Analyze the project and generate a concise ARCC.md optimized for AI comprehension. Structure it as follows:
+
+## Project Overview — One-paragraph elevator pitch: what, why, tech stack, target audience.
+
+## Quick Start — The minimal commands to build, test, and run (copy-paste ready).
+
+## Repo Anatomy — Top-level layout explained in 3-5 bullet points: which directory holds what, entry points.
+
+## Intelligent Conventions — Only what matters for code correctness:
+- Naming patterns, error handling idioms, async patterns used.
+- Git / PR conventions if discernible from history.
+- Testing expectations (where tests live, how to run a subset).
+
+## Design Decisions — Non-obvious things a newcomer would get wrong:
+- Why certain crates exist, why a particular library was chosen.
+- Trade-offs made, workarounds for known issues.
+- Configuration / environment variable semantics.
+
+## Common Pitfalls — Frequent gotchas this project has: flaky tests, known bugs, version requirements, OS-specific notes.
+
+## Notice — Key endpoints, flags, or interfaces the AI will likely be asked about.
+
+Write ONLY the ARCC.md content, no extra commentary, no section if it would be empty. Use clean markdown. Be specific — prefer concrete file paths, commands, and examples over generic advice."#;
+
+    let mut full_content = String::new();
+    let _ = tx.send(AppEvent::Token("\n\n".into()));
+
+    if let Some(prov) = provider {
+        let init_system = arcc_core::model::types::ChatMessage {
+            role: "system".into(),
+            content: init_system_content.into(),
+            tool_calls: None, tool_call_id: None, reasoning_content: None,
+        };
+        let user_msg = arcc_core::model::types::ChatMessage {
+            role: "user".into(),
+            content: format!("Generate an ARCC.md for this project:\n\n{probe_text}"),
+            tool_calls: None, tool_call_id: None, reasoning_content: None,
+        };
+        let req = arcc_core::model::types::ChatRequest {
+            model: prov.model_name().to_owned(),
+            messages: vec![init_system, user_msg],
+            tools: None,
+            tool_choice: None,
+            temperature: Some(0.5),
+            max_tokens: Some(4096),
+            stream: true,
+            thinking_mode: None,
+            reasoning_effort: None,
+        };
+        match prov.chat_stream(req).await {
+            Ok(stream) => {
+                use futures::StreamExt;
+                let mut stream = Box::pin(stream);
+                while let Some(chunk) = stream.next().await {
+                    match chunk {
+                        Ok(arcc_core::model::types::StreamChunk::Content(text)) => {
+                            full_content.push_str(&text);
+                            let _ = tx.send(AppEvent::Token(text));
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            let _ = tx.send(AppEvent::Token(format!("\n⚠ {e}")));
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                let _ = tx.send(AppEvent::Token(format!("\n❌ {e}")));
+                let _ = tx.send(AppEvent::StreamDone);
+                return;
+            }
+        }
+    } else {
+        let _ = tx.send(AppEvent::Token("\n❌ No model provider available.".into()));
+        let _ = tx.send(AppEvent::StreamDone);
+        return;
+    }
+
+    // Strip ``` fences if AI wrapped the content.
+    let clean = full_content.trim()
+        .strip_prefix("```markdown").or_else(|| full_content.trim().strip_prefix("```md"))
+        .or_else(|| full_content.trim().strip_prefix("```"))
+        .and_then(|s| s.strip_suffix("```"))
+        .map(|s| s.trim())
+        .unwrap_or(full_content.trim());
+
+    if let Err(e) = std::fs::write(arcc_path, clean) {
+        let _ = tx.send(AppEvent::Token(format!("\n⚠ Failed to write ARCC.md: {e}")));
+    } else {
+        let _ = tx.send(AppEvent::Token(format!("\n✅ ARCC.md created at `{}`", arcc_path.display())));
+        if let Ok(content) = std::fs::read_to_string(arcc_path) {
+            *ctx.project_instructions.write().await = Some(content);
+        }
+    }
+    let _ = tx.send(AppEvent::StreamDone);
+}
+
+// ---------------------------------------------------------------------------
 // Main TUI loop
 // ---------------------------------------------------------------------------
 
@@ -1823,6 +1821,37 @@ pub async fn run(ctx: SharedContext) -> anyhow::Result<()> {
                         }
                         app.input_buffer.clear();
                         app.character_index = 0;
+                        continue;
+                    }
+                    // Check for pending /init overwrite question.
+                    if app.pending_init_overwrite {
+                        app.pending_init_overwrite = false;
+                        let input = app.input_buffer.trim().to_lowercase();
+                        app.input_buffer.clear();
+                        app.character_index = 0;
+                        app.status = "idle".into();
+                        if input == "y" || input == "yes" {
+                            app.messages.push("🤖 Re-generating ARCC.md...".into());
+                            drop(std::mem::replace(&mut app.input_buffer, String::new()));
+                            // Directly spawn the init task here (same logic as below).
+                            // We copy the init block inline; ideally extract to a helper.
+                            let ctx = app.ctx.clone();
+                            let tx = app.event_tx.clone();
+                            let cwd = std::env::current_dir().unwrap_or_default();
+                            let root = std::process::Command::new("git")
+                                .args(["rev-parse", "--show-toplevel"])
+                                .output().ok()
+                                .and_then(|o| String::from_utf8(o.stdout).ok())
+                                .map(|s| s.trim().to_owned())
+                                .filter(|s| !s.is_empty())
+                                .unwrap_or_else(|| cwd.to_string_lossy().to_string());
+                            let arcc_path = std::path::Path::new(&root).join("ARCC.md");
+                            tokio::spawn(async move {
+                                run_project_init(ctx, tx, &arcc_path, &root).await;
+                            });
+                        } else {
+                            app.messages.push("🤖 Kept existing ARCC.md.".into());
+                        }
                         continue;
                     }
                     // Check for pending permission prompt first.
