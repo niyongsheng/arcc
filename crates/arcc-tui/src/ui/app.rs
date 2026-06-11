@@ -595,13 +595,9 @@ impl App {
                     if !skip_permissions {
                         let needs_confirm = ctx.allowlist.read().await.check(&command).unwrap_or(false);
                         if needs_confirm {
-                            let cow = format!(
-                                "```\n< {command} >\n{sep}\n  \\   ^__^\n   \\  (oo)\\_______\n      (__)\\       )\\/\\\n          ||----w |\n          ||     ||\n```",
-                                sep = "‑".repeat(command.chars().count() + 2).replace('‑', "-"),
-                            );
                             let (resp_tx, resp_rx) = oneshot::channel();
                             let _ = tx.send(AppEvent::Prompt(PromptRequest {
-                                message: cow,
+                                message: cow_say(&command),
                                 hint: "**[y]** approve · **[a]** allow always · **[n]** reject".into(),
                                 response_tx: resp_tx,
                             }));
@@ -945,13 +941,9 @@ impl App {
                     if !skip_permissions {
                         let needs_confirm = ctx.allowlist.read().await.check(&command).unwrap_or(false);
                         if needs_confirm {
-                            let cow = format!(
-                                "```\n< {command} >\n{sep}\n  \\   ^__^\n   \\  (oo)\\_______\n      (__)\\       )\\/\\\n          ||----w |\n          ||     ||\n```",
-                                sep = "‑".repeat(command.chars().count() + 2).replace('‑', "-"),
-                            );
                             let (resp_tx, resp_rx) = oneshot::channel();
                             let _ = tx.send(AppEvent::Prompt(PromptRequest {
-                                message: cow,
+                                message: cow_say(&command),
                                 hint: "**[y]** approve · **[a]** allow always · **[n]** reject".into(),
                                 response_tx: resp_tx,
                             }));
@@ -1228,10 +1220,9 @@ impl App {
                     .unwrap_or_else(|| cwd.to_string_lossy().to_string());
                 let path = std::path::Path::new(&root).join("ARCC.md");
                 if path.exists() {
-                    let cow = "```\n< Overwrite ARCC.md? >\n--------------------------\n  \\   ^__^\n   \\  (oo)\\_______\n      (__)\\       )\\/\\\n          ||----w |\n          ||     ||\n```".to_string();
                     let (resp_tx, resp_rx) = oneshot::channel();
                     let _ = self.event_tx.send(AppEvent::Prompt(PromptRequest {
-                        message: cow,
+                        message: cow_say("Overwrite ARCC.md?"),
                         hint: "**y** yes · **n** no".into(),
                         response_tx: resp_tx,
                     }));
@@ -1671,6 +1662,17 @@ fn get_live_net() -> (u64, u64) {
         }
     }
     (0, 0)
+}
+
+// ---------------------------------------------------------------------------
+// Cow prompt helper — reusable ASCII art for confirmation dialogs
+// ---------------------------------------------------------------------------
+
+fn cow_say(title: &str) -> String {
+    let sep = "‑".repeat(title.chars().count() + 2).replace('‑', "-");
+    format!(
+        "```\n< {title} >\n{sep}\n  \\   ^__^\n   \\  (oo)\\_______\n      (__)\\       )\\/\\\n          ||----w |\n          ||     ||\n```"
+    )
 }
 
 // ---------------------------------------------------------------------------
