@@ -569,7 +569,8 @@ impl App {
                         || first == "less" || words.contains(&"less")
                         || first == "more" || words.contains(&"more")
                         || first == "passwd" || words.contains(&"passwd")
-                        || first == "telnet" || words.contains(&"telnet");
+                        || first == "telnet" || words.contains(&"telnet")
+                        || first == "mo" || words.contains(&"mo");
                     let interactive = ai_interactive.unwrap_or(auto_interactive);
                     let executed = if interactive {
                         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
@@ -908,7 +909,8 @@ impl App {
                         || first == "less" || words.contains(&"less")
                         || first == "more" || words.contains(&"more")
                         || first == "passwd" || words.contains(&"passwd")
-                        || first == "telnet" || words.contains(&"telnet");
+                        || first == "telnet" || words.contains(&"telnet")
+                        || first == "mo" || words.contains(&"mo");
                     let interactive = ai_interactive.unwrap_or(auto_interactive);
                     let executed = if interactive {
                         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
