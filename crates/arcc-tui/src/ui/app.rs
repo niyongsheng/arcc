@@ -1288,7 +1288,7 @@ impl App {
                     // 2. Call the AI to generate ARCC.md.
                     let _ = tx.send(AppEvent::Status("generating ARCC.md...".into()));
                     let provider = ctx.providers.pick(probe_text.len(), false);
-                    let result = if let Some(prov) = provider {
+                    let result: Result<String, String> = if let Some(prov) = provider {
                         let init_system = arcc_core::model::types::ChatMessage {
                             role: "system".into(),
                             content: r#"You are a project analyst. Analyze the project and generate a concise ARCC.md optimized for AI comprehension. Structure it as follows:
@@ -1328,11 +1328,36 @@ Write ONLY the ARCC.md content, no extra commentary, no section if it would be e
                             tool_choice: None,
                             temperature: Some(0.5),
                             max_tokens: Some(4096),
-                            stream: false,
+                            stream: true,
                             thinking_mode: None,
                             reasoning_effort: None,
                         };
-                        prov.chat(req).await.map(|r| r.message.content).map_err(|e| e.to_string())
+                        // Stream the response so the user sees content as it's generated.
+                        let mut full = String::new();
+                        let _ = tx.send(AppEvent::Token("\n\n".into()));
+                        match prov.chat_stream(req).await {
+                            Ok(stream) => {
+                                use futures::StreamExt;
+                                let mut stream = Box::pin(stream);
+                                while let Some(chunk) = stream.next().await {
+                                    match chunk {
+                                        Ok(arcc_core::model::types::StreamChunk::Content(text)) => {
+                                            full.push_str(&text);
+                                            let _ = tx.send(AppEvent::Token(text));
+                                        }
+                                        Ok(arcc_core::model::types::StreamChunk::Finish(_)) => {}
+                                        Ok(_) => {}
+                                        Err(e) => {
+                                            let _ = tx.send(AppEvent::Token(format!("\n⚠ {e}")));
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                let _ = tx.send(AppEvent::Token(format!("\n❌ {e}")));
+                            }
+                        }
+                        Ok(full)
                     } else {
                         Err("no model provider available".into())
                     };
