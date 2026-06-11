@@ -1291,32 +1291,29 @@ impl App {
                     let result = if let Some(prov) = provider {
                         let init_system = arcc_core::model::types::ChatMessage {
                             role: "system".into(),
-                            content: r#"You are a project analyst. Given a project's directory tree, config files, and git history, generate an ARCC.md file following the structure below. This file will be used as project-level instructions for the AI assistant.
+                            content: r#"You are a project analyst. Analyze the project and generate a concise ARCC.md optimized for AI comprehension. Structure it as follows:
 
-The ARCC.md must follow this structure (reference CLAUDE.md in the repo root for style):
+## Project Overview — One-paragraph elevator pitch: what, why, tech stack, target audience.
 
-## Project Overview
-What this project does, its architecture, and why it exists.
+## Quick Start — The minimal commands to build, test, and run (copy-paste ready).
 
-## Git Conventions
-Commit message style, branch naming rules.
+## Repo Anatomy — Top-level layout explained in 3-5 bullet points: which directory holds what, entry points.
 
-## Tech Stack
-Language, framework, key dependencies, build system.
+## Intelligent Conventions — Only what matters for code correctness:
+- Naming patterns, error handling idioms, async patterns used.
+- Git / PR conventions if discernible from history.
+- Testing expectations (where tests live, how to run a subset).
 
-## Directory Structure
-Brief explanation of the project layout.
+## Design Decisions — Non-obvious things a newcomer would get wrong:
+- Why certain crates exist, why a particular library was chosen.
+- Trade-offs made, workarounds for known issues.
+- Configuration / environment variable semantics.
 
-## Architecture Highlights
-Key design decisions, important patterns, anything non-obvious.
+## Common Pitfalls — Frequent gotchas this project has: flaky tests, known bugs, version requirements, OS-specific notes.
 
-## Common Tasks
-Build / test / run / deploy commands.
+## API / CLI Reference (if applicable) — Key endpoints, flags, or interfaces the AI will likely be asked about.
 
-## Notes
-Any gotchas, environment requirements, or context the AI must know.
-
-Write ONLY the ARCC.md content, no extra commentary. Use clean markdown."#.into(),
+Write ONLY the ARCC.md content, no extra commentary, no section if it would be empty. Use clean markdown. Be specific — prefer concrete file paths, commands, and examples over generic advice."#.into(),
                             tool_calls: None, tool_call_id: None, reasoning_content: None,
                         };
                         let user_msg = arcc_core::model::types::ChatMessage {
