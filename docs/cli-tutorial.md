@@ -104,4 +104,4 @@ ARCC CLI 可以通过 MCP 协议注册为 Claude Code 的工具，让 Claude
 }
 ```
 
-详见 [ARCC CLI MCP Skill](skills/arcc-cli-skill.md)。
+详见 [ARCC CLI MCP Skill](skills/arcc-cli.md)。
