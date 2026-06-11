@@ -1,4 +1,5 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
 use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -86,6 +87,10 @@ pub struct App {
     pub live_metrics: components::LiveMetrics,
     /// Background monitor task handle (aborted when dashboard closes).
     pub monitor_handle: Option<tokio::task::JoinHandle<()>>,
+
+    // ── Tree registry for interactive JSON/TOML blocks ──
+    pub tree_registry: components::TreeRegistry,
+    pub focused_tree: Option<u64>,
 }
 
 impl App {
@@ -124,6 +129,8 @@ impl App {
             dashboard_cursor: 0,
             live_metrics: components::LiveMetrics::default(),
             monitor_handle: None,
+            tree_registry: Arc::new(Mutex::new(HashMap::new())),
+            focused_tree: None,
             event_tx,
             event_rx,
             ctx,
@@ -308,6 +315,24 @@ impl App {
             }
             AppEvent::Tab => {
                 debug!("tab pressed");
+                // If input is empty and we have tree blocks, cycle focus.
+                if self.input_buffer.is_empty() {
+                    let reg = self.tree_registry.lock().unwrap();
+                    let hashes: Vec<u64> = reg.keys().copied().collect();
+                    if hashes.is_empty() {
+                        self.tab_active = false;
+                    } else if let Some(current) = self.focused_tree {
+                        // Cycle to next hash (wrap around).
+                        let pos = hashes.iter().position(|h| *h == current);
+                        match pos {
+                            Some(p) if p + 1 < hashes.len() => self.focused_tree = Some(hashes[p + 1]),
+                            _ => self.focused_tree = Some(hashes[0]),
+                        }
+                    } else {
+                        self.focused_tree = Some(hashes[0]);
+                    }
+                    return;
+                }
                 let input = &self.input_buffer;
                 if let Some(cmd_prefix) = input.strip_prefix('/') {
                     if !self.tab_active {
@@ -356,7 +381,9 @@ impl App {
                 self.live_metrics.tx_rate = tx_rate;
             }
             AppEvent::Dismiss => {
-                if self.status != "idle" {
+                if self.focused_tree.is_some() {
+                    self.focused_tree = None;
+                } else if self.status != "idle" {
                     // Esc during AI response: abort the streaming task.
                     info!("user aborted AI response");
                     if let Some(handle) = self.task_handle.take() {
@@ -1564,6 +1591,21 @@ pub async fn run(ctx: SharedContext) -> anyhow::Result<()> {
         while let Ok(event) = app.event_rx.try_recv() {
             match event {
                 AppEvent::Input(ch) if ch == "\n" || ch == "\r" => {
+                    // If a tree block is focused and input is empty, cycle its view mode.
+                    if app.input_buffer.trim().is_empty() && app.focused_tree.is_some() {
+                        let hash = app.focused_tree.unwrap();
+                        let mut reg = app.tree_registry.lock().unwrap();
+                        if let Some(entry) = reg.get_mut(&hash) {
+                            entry.mode = match entry.mode {
+                                components::TreeViewMode::Collapsed => components::TreeViewMode::Expanded,
+                                components::TreeViewMode::Expanded => components::TreeViewMode::Raw,
+                                components::TreeViewMode::Raw => components::TreeViewMode::Collapsed,
+                            };
+                        }
+                        app.input_buffer.clear();
+                        app.character_index = 0;
+                        continue;
+                    }
                     // Check for pending permission prompt first.
                     if let Some(pending) = app.pending_confirm.take() {
                         let input = app.input_buffer.trim().to_lowercase();
@@ -1747,14 +1789,28 @@ pub async fn run(ctx: SharedContext) -> anyhow::Result<()> {
                         &app.live_metrics,
                     );
                 } else {
-                    components::render_chat(f, areas[1], &app.messages, app.scroll_offset);
+                    components::render_chat(
+    f,
+    areas[1],
+    &app.messages,
+    app.scroll_offset,
+    &app.tree_registry,
+    app.focused_tree,
+);
                 }
             } else if app.messages.is_empty() {
                 // Startup: render logo as a ratatui widget (no markdown mangle).
                 let model = app.ctx.providers.flash().map(|p| p.model_name()).unwrap_or("?");
                 logo::render_logo(f, areas[1], env!("CARGO_PKG_VERSION"), model);
             } else {
-                components::render_chat(f, areas[1], &app.messages, app.scroll_offset);
+                components::render_chat(
+    f,
+    areas[1],
+    &app.messages,
+    app.scroll_offset,
+    &app.tree_registry,
+    app.focused_tree,
+);
             }
             components::render_divider(f, areas[3]);
             components::render_input(f, areas[4], &app.input_buffer);

@@ -12,9 +12,40 @@ use ratatui_markdown::markdown::{MarkdownRenderer, RenderHooks};
 use ratatui_markdown::theme::ThemeConfig;
 use ratatui_markdown::highlight::{HighlightHooks, TreeSitterHighlighter};
 use ratatui_markdown::tree::{CollapsibleTree, KeyStyle};
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, Mutex};
+use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use ratatui_markdown::RichTextTheme;
 use tui_spinner::FluxFrames;
 use crate::commands;
+
+// ── Tree registry types ───────────────────────────────────────────────
+
+/// Display mode for a JSON/TOML tree block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TreeViewMode {
+    Collapsed,
+    Expanded,
+    Raw,
+}
+
+/// Per-block entry in the tree registry, keyed by hash64 of source text.
+pub struct TreeRegistryEntry {
+    pub mode: TreeViewMode,
+    pub collapsed_lines: Vec<Line<'static>>,
+    pub expanded_lines: Vec<Line<'static>>,
+    pub raw_lines: Vec<Line<'static>>,
+}
+
+/// Shared registry mapping source-code hash → tree entry.
+pub type TreeRegistry = Arc<Mutex<HashMap<u64, TreeRegistryEntry>>>;
+
+pub fn hash_tree_source(code: &str) -> u64 {
+    let mut h = DefaultHasher::new();
+    code.hash(&mut h);
+    h.finish()
+}
 
 // ── Dashboard data types ─────────────────────────────────────────────
 
@@ -64,40 +95,106 @@ const CLR_STATUS_ERR: Color = Color::Rgb(255, 100, 100);
 
 // ---------------------------------------------------------------------------
 // TreeAwareHooks — custom RenderHooks that renders JSON/TOML code blocks
-// as collapsible trees and delegates everything else to HighlightHooks.
+// as collapsible trees (with interactive mode) and delegates everything
+// else to HighlightHooks.
 // ---------------------------------------------------------------------------
 
 struct TreeAwareHooks {
     highlight: HighlightHooks,
     max_width: usize,
+    registry: TreeRegistry,
+    focused_hash: Option<u64>,
 }
 
 impl TreeAwareHooks {
-    fn new(highlighter: Arc<TreeSitterHighlighter>, max_width: usize) -> Self {
+    fn new(
+        highlighter: Arc<TreeSitterHighlighter>,
+        max_width: usize,
+        registry: TreeRegistry,
+        focused_hash: Option<u64>,
+    ) -> Self {
         Self {
             highlight: HighlightHooks::new(highlighter, max_width),
             max_width,
+            registry,
+            focused_hash,
         }
+    }
+
+    /// Build and cache the three view modes for a new tree block.
+    fn cache_block(&self, lang: &str, code: &str) -> Option<TreeRegistryEntry> {
+        let style = if lang == "json" { KeyStyle::Json } else { KeyStyle::Toml };
+        let mut tree = if lang == "json" {
+            CollapsibleTree::from_json_str(code)?
+        } else {
+            CollapsibleTree::from_toml_str(code)?
+        }
+        .with_key_style(style)
+        .with_show_root(false);
+
+        // Collapsed: only root visible
+        tree.collapse_all();
+        let collapsed_lines = tree.render_lines(self.max_width, &ThemeConfig::default());
+
+        // Expanded: all nodes visible
+        tree.expand_all();
+        let expanded_lines = tree.render_lines(self.max_width, &ThemeConfig::default());
+
+        // Raw: syntax-highlighted code block
+        let raw_lines = self.highlight.render_code_block(lang, code)
+            .unwrap_or_default();
+
+        Some(TreeRegistryEntry {
+            mode: TreeViewMode::Collapsed,
+            collapsed_lines,
+            expanded_lines,
+            raw_lines,
+        })
     }
 }
 
 impl RenderHooks for TreeAwareHooks {
     fn render_code_block(&self, lang: &str, code: &str) -> Option<Vec<Line<'static>>> {
-        // JSON/TOML → collapsible tree
-        if lang == "json" || lang == "toml" {
-            let style = if lang == "json" { KeyStyle::Json } else { KeyStyle::Toml };
-            let mut tree = if lang == "json" {
-                CollapsibleTree::from_json_str(code)?
-            } else {
-                CollapsibleTree::from_toml_str(code)?
-            }
-            .with_key_style(style)
-            .with_show_root(false);
-            tree.expand_all();
-            return Some(tree.render_lines(self.max_width, &ThemeConfig::default()));
+        if lang != "json" && lang != "toml" {
+            return self.highlight.render_code_block(lang, code);
         }
-        // Everything else → syntax highlighting via HighlightHooks
-        self.highlight.render_code_block(lang, code)
+
+        let hash = hash_tree_source(code);
+
+        // Look up or create a registry entry.
+        let mut reg = self.registry.lock().unwrap();
+        if !reg.contains_key(&hash) {
+            if let Some(entry) = self.cache_block(lang, code) {
+                reg.insert(hash, entry);
+            } else {
+                // Invalid JSON/TOML — fall through to syntax highlighting.
+                return self.highlight.render_code_block(lang, code);
+            }
+        }
+
+        let entry = reg.get(&hash).unwrap();
+        let lines = match entry.mode {
+            TreeViewMode::Collapsed => &entry.collapsed_lines,
+            TreeViewMode::Expanded => &entry.expanded_lines,
+            TreeViewMode::Raw => &entry.raw_lines,
+        };
+
+        let is_focused = self.focused_hash == Some(hash);
+        if is_focused {
+            // Highlight the top border of the focused block with focused color.
+            let mut themed = lines.to_vec();
+            let border_style = Style::default().fg(ThemeConfig::default().get_focused_border_color());
+            if let Some(first) = themed.first_mut() {
+                for span in &mut first.spans {
+                    if span.style.fg == Some(Color::DarkGray) {
+                        span.style = span.style.patch(border_style);
+                    }
+                }
+            }
+            Some(themed)
+        } else {
+            Some(lines.clone())
+        }
     }
 }
 
@@ -109,7 +206,14 @@ impl RenderHooks for TreeAwareHooks {
 ///
 /// `scroll_offset` controls how many lines the view is shifted **up** from the
 /// bottom (0 = follow newest content at the bottom).
-pub fn render_chat(f: &mut Frame, area: Rect, messages: &[String], scroll_offset: usize) {
+pub fn render_chat(
+    f: &mut Frame,
+    area: Rect,
+    messages: &[String],
+    scroll_offset: usize,
+    tree_registry: &TreeRegistry,
+    focused_tree: Option<u64>,
+) {
     let mut text = String::new();
 
     for msg in messages {
@@ -138,7 +242,12 @@ pub fn render_chat(f: &mut Frame, area: Rect, messages: &[String], scroll_offset
     let renderer = {
         static HIGHLIGHTER: LazyLock<Arc<TreeSitterHighlighter>> =
             LazyLock::new(|| Arc::new(TreeSitterHighlighter::new()));
-        let hooks = TreeAwareHooks::new(HIGHLIGHTER.clone(), area.width as usize);
+        let hooks = TreeAwareHooks::new(
+            HIGHLIGHTER.clone(),
+            area.width as usize,
+            TreeRegistry::clone(tree_registry),
+            focused_tree,
+        );
         MarkdownRenderer::new(area.width as usize)
             .with_render_hooks(Box::new(hooks))
     };
