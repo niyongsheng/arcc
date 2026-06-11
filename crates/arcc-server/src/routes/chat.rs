@@ -120,7 +120,7 @@ pub async fn handler(
                                 .send(Ok(Event::default().event("reasoning").data(text)))
                                 .await;
                         }
-                        Ok(StreamChunk::Finish(_)) => {
+                        Ok(StreamChunk::Finish(usage)) => {
                             // Persist assistant response.
                             let mut s = session.write().await;
                             let asst_tokens = provider.count_tokens(&full_response);
@@ -138,6 +138,16 @@ pub async fn handler(
                                 },
                                 asst_tokens,
                             );
+                            // Record API-reported token usage
+                            let model = provider.model_name().to_owned();
+                            if let Err(e) = ctx.storage.record_token_usage(
+                                &input.session_id,
+                                &model,
+                                usage.prompt_tokens as i64,
+                                usage.completion_tokens as i64,
+                            ) {
+                                tracing::warn!(err = %e, "failed to record token usage");
+                            }
                             info!(response_len = full_response.len(), "chat complete");
                             let _ = tx
                                 .send(Ok(Event::default().event("finish").data("[DONE]")))

@@ -85,6 +85,24 @@ impl ArccStorage {
         Ok(queries::total_tokens(&conn, days)?)
     }
 
+    /// Count total messages across all sessions.
+    pub fn message_count(&self) -> Result<i64, StorageError> {
+        let conn = self.db.lock().expect("db mutex poisoned");
+        Ok(queries::count_messages(&conn)?)
+    }
+
+    /// Record (or accumulate) token usage for a session + model on today's date.
+    pub fn record_token_usage(
+        &self,
+        session_id: &str,
+        model: &str,
+        input_tokens: i64,
+        output_tokens: i64,
+    ) -> Result<(), StorageError> {
+        let conn = self.db.lock().expect("db mutex poisoned");
+        Ok(queries::upsert_token_usage(&conn, session_id, model, input_tokens, output_tokens)?)
+    }
+
     /// Latest summary for a session.
     pub fn latest_summary(&self, session_id: &str) -> Result<Option<Summary>, StorageError> {
         let conn = self.db.lock().expect("db mutex poisoned");

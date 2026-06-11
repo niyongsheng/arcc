@@ -63,6 +63,9 @@ pub fn spawn_input_handler(tx: mpsc::UnboundedSender<AppEvent>) -> tokio::task::
                         KeyCode::Backspace => {
                             let _ = tx.send(AppEvent::Input("\x08".into()));
                         }
+                        KeyCode::Esc => {
+                            let _ = tx.send(AppEvent::Dismiss);
+                        }
                         KeyCode::Char(ch) => {
                             let _ = tx.send(AppEvent::Input(ch.to_string()));
                         }

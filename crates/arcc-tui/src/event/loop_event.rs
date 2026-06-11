@@ -54,6 +54,15 @@ pub enum AppEvent {
         command: String,
         response_tx: oneshot::Sender<String>,
     },
+    /// Live system metrics update (CPU, memory, network).
+    LiveMetrics {
+        cpu_pct: f64,
+        mem_pct: f64,
+        rx_rate: f64,
+        tx_rate: f64,
+    },
+    /// Dismiss current overlay (dashboard, etc.)
+    Dismiss,
 }
 
 /// Create the MPSC channel and spawn a tick generator.

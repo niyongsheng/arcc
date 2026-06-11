@@ -39,6 +39,8 @@ pub struct App {
     pub tick: u64,
     pub running: bool,
     pub event_rx: mpsc::UnboundedReceiver<AppEvent>,
+    /// Sender for AppEvents — shared so background tasks can enqueue events.
+    pub event_tx: mpsc::UnboundedSender<AppEvent>,
     pub ctx: SharedContext,
 
     // ── Multi-turn conversation & thinking mode ──
@@ -64,14 +66,33 @@ pub struct App {
     tab_active: bool,
     /// Blink state — visible when > 0, toggles every 3 Ticks (~1.5 s period).
     blink: u8,
+
+    // ── Dashboard overlay ──
+    /// True when the full-screen dashboard replaces the chat area.
+    pub show_dashboard: bool,
+    /// Pre-collected dashboard data.
+    pub dashboard: Option<components::DashboardData>,
+    /// Scroll offset for the sessions table within the dashboard.
+    pub dashboard_scroll: usize,
+    /// Index of the currently selected row in the sessions table.
+    pub dashboard_cursor: usize,
+    /// Latest live system metrics (CPU, MEM, NET) from background monitor.
+    pub live_metrics: components::LiveMetrics,
+    /// Background monitor task handle (aborted when dashboard closes).
+    pub monitor_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl App {
-    pub fn new(event_rx: mpsc::UnboundedReceiver<AppEvent>, ctx: SharedContext) -> Self {
-        // Create an initial session for multi-turn conversation.
-        let session = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(ctx.sessions.create("tui", "tui"))
-        });
+    pub fn new(
+        event_tx: mpsc::UnboundedSender<AppEvent>,
+        event_rx: mpsc::UnboundedReceiver<AppEvent>,
+        ctx: SharedContext,
+    ) -> Self {
+        // In-memory session — NOT persisted until first user input.
+        let context_max = ctx.storage.config.model.context_max_tokens;
+        let session = Arc::new(RwLock::new(
+            arcc_core::session::Session::new("pending", "tui", "tui", context_max, None),
+        ));
         Self {
             input_buffer: String::new(),
             character_index: 0,
@@ -90,6 +111,13 @@ impl App {
             completion_index: 0,
             tab_active: false,
             blink: 0,
+            show_dashboard: false,
+            dashboard: None,
+            dashboard_scroll: 0,
+            dashboard_cursor: 0,
+            live_metrics: components::LiveMetrics::default(),
+            monitor_handle: None,
+            event_tx,
             event_rx,
             ctx,
         }
@@ -154,11 +182,29 @@ impl App {
                 self.status = "waiting...".into();
             }
             AppEvent::ScrollUp(lines) => {
+                if self.show_dashboard {
+                    let step = lines as usize;
+                    self.dashboard_cursor = self.dashboard_cursor.saturating_sub(step);
+                    if self.dashboard_cursor < self.dashboard_scroll {
+                        self.dashboard_scroll = self.dashboard_cursor;
+                    }
+                    return;
+                }
                 debug!(lines, "scroll up");
                 self.scroll_offset = self.scroll_offset.saturating_add(lines as usize);
             }
             AppEvent::ScrollDown(lines) => {
-                debug!(lines, "scroll down");
+                if self.show_dashboard {
+                    let max_rows = self.dashboard.as_ref().map_or(0, |d| d.session_ids.len().saturating_sub(1));
+                    let step = lines as usize;
+                    self.dashboard_cursor = (self.dashboard_cursor + step).min(max_rows);
+                    let body_h = 8;
+                    if self.dashboard_cursor >= self.dashboard_scroll + body_h {
+                        self.dashboard_scroll = self.dashboard_cursor.saturating_sub(body_h).saturating_add(1);
+                    }
+                    return;
+                }
+                debug!("scroll down");
                 self.scroll_offset = self.scroll_offset.saturating_sub(lines as usize);
             }
             AppEvent::Token(text) => {
@@ -183,6 +229,17 @@ impl App {
                 }
             }
             AppEvent::HistoryPrev => {
+                // When dashboard is shown, move cursor up in sessions table.
+                if self.show_dashboard {
+                    if self.dashboard_cursor > 0 {
+                        self.dashboard_cursor -= 1;
+                        // Auto-scroll: keep cursor in view
+                        if self.dashboard_cursor < self.dashboard_scroll {
+                            self.dashboard_scroll = self.dashboard_cursor;
+                        }
+                    }
+                    return;
+                }
                 // Terminal converts mouse scroll-wheel to ↑/↓. When the input
                 // buffer is empty, scroll the chat; otherwise navigate history.
                 if self.input_buffer.is_empty() {
@@ -199,6 +256,20 @@ impl App {
                 }
             }
             AppEvent::HistoryNext => {
+                // When dashboard is shown, move cursor down in sessions table.
+                if self.show_dashboard {
+                    if let Some(ref data) = self.dashboard
+                        && self.dashboard_cursor + 1 < data.session_ids.len()
+                    {
+                        self.dashboard_cursor += 1;
+                        // Auto-scroll: keep cursor in view
+                        let body_h = 8;
+                        if self.dashboard_cursor >= self.dashboard_scroll + body_h {
+                            self.dashboard_scroll = self.dashboard_cursor.saturating_sub(body_h).saturating_add(1);
+                        }
+                    }
+                    return;
+                }
                 // Terminal converts mouse scroll-wheel to ↑/↓. When the input
                 // buffer is empty, scroll the chat; otherwise navigate history.
                 if self.input_buffer.is_empty() {
@@ -257,6 +328,32 @@ impl App {
                 info!("user quit");
                 self.running = false;
             }
+            AppEvent::LiveMetrics {
+                cpu_pct,
+                mem_pct,
+                rx_rate,
+                tx_rate,
+            } => {
+                self.live_metrics.cpu_pct = cpu_pct;
+                self.live_metrics.mem_pct = mem_pct;
+                self.live_metrics.rx_rate = rx_rate;
+                self.live_metrics.tx_rate = tx_rate;
+            }
+            AppEvent::Dismiss => {
+                if self.show_dashboard {
+                    debug!("dismissing dashboard");
+                    self.show_dashboard = false;
+                    self.dashboard_scroll = 0;
+                    self.dashboard_cursor = 0;
+                    stop_monitor(&mut self.monitor_handle);
+                } else if self.dashboard.is_some()
+                    && self.messages.last().is_some_and(|m| m.contains("Esc to return"))
+                {
+                    // Re-open dashboard after viewing session messages
+                    self.show_dashboard = true;
+                    info!("returning to dashboard");
+                }
+            }
             AppEvent::InteractiveCommand { .. } => {
                 // Handled in the main event loop (needs terminal access).
             }
@@ -265,6 +362,7 @@ impl App {
 
     /// Plan mode — streams a plan-focused prompt through the LLM with thinking mode enabled.
     fn plan_submit(&mut self, task: &str, tx: mpsc::UnboundedSender<AppEvent>) {
+        self.ensure_session();
         self.thinking_mode = true;
         self.messages.push(format!("🧑 /plan {task}"));
         self.status = "planning".into();
@@ -339,6 +437,7 @@ impl App {
                 let mut content_buf = String::new();
                 let mut reasoning_buf = String::new();
                 let mut tool_calls: Vec<ToolCall> = Vec::new();
+                let mut last_usage: Option<arcc_core::model::types::Usage> = None;
 
                 match provider.chat_stream(req).await {
                     Ok(stream) => {
@@ -356,7 +455,10 @@ impl App {
                                 Ok(StreamChunk::ToolCallStart(tc)) => {
                                     tool_calls.push(tc);
                                 }
-                                Ok(StreamChunk::Finish(_)) | Ok(StreamChunk::ToolCallEnd { .. }) => {}
+                                Ok(StreamChunk::Finish(usage)) => {
+                                    last_usage = Some(usage);
+                                }
+                                Ok(StreamChunk::ToolCallEnd { .. }) => {}
                                 Err(e) => {
                                     error!(err = %e, "stream error");
                                     let _ = tx.send(AppEvent::Token(format!("\n ❌ stream error: {e}")));
@@ -370,6 +472,20 @@ impl App {
                         let _ = tx.send(AppEvent::Token(format!("\n ❌ {e}")));
                         let _ = tx.send(AppEvent::StreamDone);
                         return;
+                    }
+                }
+
+                // Record token usage from API response
+                if let Some(ref usage) = last_usage {
+                    let sid = session.read().await.id.clone();
+                    let mdl = provider.model_name().to_owned();
+                    if let Err(e) = ctx.storage.record_token_usage(
+                        &sid,
+                        &mdl,
+                        usage.prompt_tokens as i64,
+                        usage.completion_tokens as i64,
+                    ) {
+                        warn!(err = %e, "failed to record token usage");
                     }
                 }
 
@@ -529,12 +645,30 @@ impl App {
         });
     }
 
+    /// Ensure a real persisted session exists (lazy creation on first input).
+    fn ensure_session(&mut self) {
+        if self.session.try_read().ok().map(|s| s.id == "pending").unwrap_or(false) {
+            let persisted = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current()
+                    .block_on(self.ctx.sessions.create("tui", "tui"))
+            });
+            self.session = persisted;
+            info!("session persisted on first user input");
+        }
+    }
+
     /// Submit a prompt and handle the tool-calling stream loop.
     fn submit(&mut self, tx: mpsc::UnboundedSender<AppEvent>) {
         let prompt = std::mem::take(&mut self.input_buffer);
         let prompt = prompt.trim().to_owned();
         if prompt.is_empty() {
             return;
+        }
+        // Dismiss dashboard when user types any prompt (except /dashboard itself).
+        if self.show_dashboard && prompt != "/dashboard" {
+            self.show_dashboard = false;
+            self.dashboard_scroll = 0;
+            stop_monitor(&mut self.monitor_handle);
         }
         self.input_history.push(prompt.clone());
         self.history_index = 0;
@@ -549,6 +683,9 @@ impl App {
             self.dispatch_command(&prompt);
             return;
         }
+
+        // Persist session only now — proceeding will push messages.
+        self.ensure_session();
 
         self.messages.push(format!("🧑 {prompt}"));
         self.status = "thinking".into();
@@ -636,6 +773,7 @@ impl App {
                 let mut content_buf = String::new();
                 let mut reasoning_buf = String::new();
                 let mut tool_calls: Vec<ToolCall> = Vec::new();
+                let mut last_usage: Option<arcc_core::model::types::Usage> = None;
 
                 match provider.chat_stream(req).await {
                     Ok(stream) => {
@@ -653,7 +791,10 @@ impl App {
                                 Ok(StreamChunk::ToolCallStart(tc)) => {
                                     tool_calls.push(tc);
                                 }
-                                Ok(StreamChunk::Finish(_)) | Ok(StreamChunk::ToolCallEnd { .. }) => {}
+                                Ok(StreamChunk::Finish(usage)) => {
+                                    last_usage = Some(usage);
+                                }
+                                Ok(StreamChunk::ToolCallEnd { .. }) => {}
                                 Err(e) => {
                                     error!(err = %e, "stream error");
                                     let _ = tx.send(AppEvent::Token(format!("\n ❌ stream error: {e}")));
@@ -668,6 +809,20 @@ impl App {
                         let _ = tx.send(AppEvent::Token(format!("\n ❌ {e}")));
                         let _ = tx.send(AppEvent::StreamDone);
                         return;
+                    }
+                }
+
+                // Record token usage from API response
+                if let Some(ref usage) = last_usage {
+                    let sid = session.read().await.id.clone();
+                    let mdl = provider.model_name().to_owned();
+                    if let Err(e) = ctx.storage.record_token_usage(
+                        &sid,
+                        &mdl,
+                        usage.prompt_tokens as i64,
+                        usage.completion_tokens as i64,
+                    ) {
+                        warn!(err = %e, "failed to record token usage");
                     }
                 }
 
@@ -860,11 +1015,22 @@ impl App {
                 }
                 self.messages.clear();
                 self.reasoning_content.clear();
-                let new_session = tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current()
-                        .block_on(self.ctx.sessions.create("tui", "tui"))
-                });
-                self.session = new_session;
+                // Only create a new DB session if we had a real one before
+                let is_pending = self.session.try_read().ok().map(|s| s.id == "pending").unwrap_or(true);
+                if is_pending {
+                    // Reset to a fresh in-memory session
+                    let ctx = &self.ctx;
+                    let context_max = ctx.storage.config.model.context_max_tokens;
+                    self.session = Arc::new(RwLock::new(
+                        arcc_core::session::Session::new("pending", "tui", "tui", context_max, None),
+                    ));
+                } else {
+                    let new_session = tokio::task::block_in_place(|| {
+                        tokio::runtime::Handle::current()
+                            .block_on(self.ctx.sessions.create("tui", "tui"))
+                    });
+                    self.session = new_session;
+                }
             }
             "model" => {
                 let flash = self.ctx.providers.flash().map(|p| p.model_name()).unwrap_or("?");
@@ -956,16 +1122,16 @@ impl App {
                 self.messages.push(format!("🤖 History: {history_count} entries"));
                 self.messages.push(format!("🤖 Session: `{session_id}`"));
             }
-            "data" => {
-                let sub = parts.get(1).copied().unwrap_or("help");
-                let block = tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current().block_on(async {
-                        dbg_data(&self.ctx.storage, sub, &parts[2..]).await
-                    })
-                });
-                match block {
-                    Ok(lines) => self.messages.extend(lines),
-                    Err(e) => self.messages.push(format!("⚠ data error: {e}")),
+            "dashboard" | "data" => {
+                self.show_dashboard = !self.show_dashboard;
+                if self.show_dashboard {
+                    self.dashboard = Some(collect_dashboard_data(&self.ctx));
+                    self.dashboard_scroll = 0;
+                    self.dashboard_cursor = 0;
+                    info!("dashboard opened");
+                    start_monitor(&mut self.monitor_handle, self.event_tx.clone());
+                } else {
+                    stop_monitor(&mut self.monitor_handle);
                 }
             }
             "exit" | "quit" => {
@@ -979,151 +1145,394 @@ impl App {
     }
 }
 
-// ── `/data` subcommand handler ─────────────────────────────────────────
+// ── Dashboard data collection ───────────────────────────────────────
 
-/// Parse an integer from `args[pos]` with a default, or an error message.
-fn parse_opt(args: &[&str], pos: usize, default: usize, name: &str) -> Result<usize, String> {
-    args.get(pos)
-        .map(|s| s.parse::<usize>().map_err(|_| format!("invalid {name}: {s}")))
-        .unwrap_or(Ok(default))
+/// Collect all data needed to render the dashboard overlay.
+fn collect_dashboard_data(ctx: &arcc_core::context::SharedContext) -> components::DashboardData {
+    // System info
+    let hostname = std::process::Command::new("hostname")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_owned())
+        .unwrap_or_else(|| "?".into());
+    let os = std::env::consts::OS.to_owned();
+    let arch = std::env::consts::ARCH.to_owned();
+    let cpu_count = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(0);
+    let uptime = get_uptime();
+    let (mem_total, mem_used) = get_memory_info();
+
+    let total_tokens = ctx.storage.total_tokens(7).unwrap_or((0, 0));
+    let (total_input, total_output) = total_tokens;
+
+    // Sessions
+    let sessions = ctx.storage.list_sessions(50).unwrap_or_default();
+    let session_count = sessions.len();
+    let total_msgs: usize = ctx.storage.message_count().unwrap_or(0) as usize;
+
+    // Format session rows for table display
+    let session_rows: Vec<String> = sessions.iter().map(|s| {
+        let id_short = if s.id.len() > 8 { &s.id[..8] } else { &s.id };
+        let active = fmt_local_ts(&s.last_active_at);
+        format!("{}|{}|{}|{}", id_short, s.name, s.mode, active)
+    }).collect();
+    let session_ids: Vec<String> = sessions.iter().map(|s| s.id.clone()).collect();
+
+    // Daily token usage
+    let token_daily = ctx.storage.token_usage_daily(7).unwrap_or_default();
+    let chart_data: Vec<(String, u64)> = token_daily.iter().map(|r| {
+        let label = if r.date.len() >= 10 {
+            r.date[8..10].trim_start_matches('0').to_owned() // "11"
+        } else {
+            r.date.clone()
+        };
+        let total = (r.input_tokens + r.output_tokens) as u64;
+        (label, total)
+    }).collect();
+
+    // Recent audit events
+    let audit = ctx.storage.recent_audit(10).unwrap_or_default();
+    let audit_items: Vec<(String, String, bool)> = audit.iter().map(|ev| {
+        match ev {
+            arcc_storage::audit::types::AuditEvent::CommandExec { ts, cmd, result, .. } => {
+                let ok = matches!(result, arcc_storage::audit::types::ExecResult::Ok);
+                let ts = fmt_local_ts(ts);
+                (ts, format!("cmd {cmd}"), ok)
+            }
+            arcc_storage::audit::types::AuditEvent::CommandBlocked { ts, cmd, .. } => {
+                let ts = fmt_local_ts(ts);
+                (ts, format!("blocked {cmd}"), false)
+            }
+            arcc_storage::audit::types::AuditEvent::McpToolCall { ts, tool, result, .. } => {
+                let ok = matches!(result, arcc_storage::audit::types::ExecResult::Ok);
+                let ts = fmt_local_ts(ts);
+                (ts, format!("mcp {tool}"), ok)
+            }
+            arcc_storage::audit::types::AuditEvent::HumanConfirm { ts, action, decision, .. } => {
+                let ok = matches!(decision, arcc_storage::audit::types::ConfirmDecision::Approved);
+                let ts = fmt_local_ts(ts);
+                (ts, format!("confirm {action}"), ok)
+            }
+        }
+    }).collect();
+
+    components::DashboardData {
+        system: components::SystemInfo {
+            hostname,
+            os: format!("{os} ({arch})"),
+            cpu_count,
+            uptime: uptime.unwrap_or_else(|| "?".into()),
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+            memory_total_mb: mem_total,
+            memory_used_mb: mem_used,
+        },
+        sessions: session_rows,
+        session_ids,
+        session_count,
+        msg_count: total_msgs,
+        token_daily: chart_data,
+        total_input,
+        total_output,
+        audit_items,
+    }
 }
 
-/// Dispatches `/data <sub> [args...]`.
-async fn dbg_data(
-    storage: &arcc_storage::ArccStorage,
-    sub: &str,
-    args: &[&str],
-) -> Result<Vec<String>, String> {
-    match sub {
-        "sessions" => {
-            let limit = parse_opt(args, 0, 10, "limit")?;
-            let sessions = storage.list_sessions(limit).map_err(|e| e.to_string())?;
-            if sessions.is_empty() {
-                return Ok(vec!["🤖 No sessions found.".into()]);
-            }
-            let mut lines = vec!["🤖 **Recent sessions**".into(), "".into()];
-            lines.push("| # | ID | Name | Mode | Last Active |".into());
-            lines.push("|---|---|---|---|---|".into());
-            for (i, s) in sessions.iter().enumerate() {
-                let id_short = if s.id.len() > 8 { &s.id[..8] } else { &s.id };
-                lines.push(format!(
-                    "| {} | `{}` | {} | {} | {} |",
-                    i + 1,
-                    id_short,
-                    s.name,
-                    s.mode,
-                    &s.last_active_at[..19]
-                ));
-            }
-            Ok(lines)
-        }
+/// Get a human-readable uptime string (platform-specific).
+fn get_uptime() -> Option<String> {
+    if cfg!(target_os = "macos") {
+        let out = std::process::Command::new("sysctl")
+            .args(["-n", "kern.boottime"])
+            .output()
+            .ok()?;
+        let s = String::from_utf8(out.stdout).ok()?;
+        // Parse: { sec = 1234567890, usec = 0 } Tue Jun 11 ...
+        let sec = s.split("sec = ").nth(1)?.split(',').next()?;
+        let boot_secs: u64 = sec.trim().parse().ok()?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_secs();
+        let up = now - boot_secs;
+        let d = up / 86400;
+        let h = (up % 86400) / 3600;
+        let m = (up % 3600) / 60;
+        Some(if d > 0 {
+            format!("{d}d {h}h {m}m")
+        } else if h > 0 {
+            format!("{h}h {m}m")
+        } else {
+            format!("{m}m")
+        })
+    } else if cfg!(target_os = "linux") {
+        let content = std::fs::read_to_string("/proc/uptime").ok()?;
+        let secs: f64 = content.split_whitespace().next()?.parse().ok()?;
+        let up = secs as u64;
+        let d = up / 86400;
+        let h = (up % 86400) / 3600;
+        let m = (up % 3600) / 60;
+        Some(if d > 0 {
+            format!("{d}d {h}h {m}m")
+        } else if h > 0 {
+            format!("{h}h {m}m")
+        } else {
+            format!("{m}m")
+        })
+    } else {
+        None
+    }
+}
 
-        "messages" => {
-            let session_id = args.first().ok_or("usage: `/data messages <session-id> [limit]`")?;
-            let limit = parse_opt(args, 1, 20, "limit")?;
-            let msgs = storage.session_messages(session_id, limit).map_err(|e| e.to_string())?;
-            if msgs.is_empty() {
-                return Ok(vec![format!("🤖 No messages for session `{session_id}`.")]);
-            }
-            let mut lines = vec![format!("🤖 **Messages** (session `{}`, last {})", &session_id[..8.min(session_id.len())], limit), String::new()];
-            for m in msgs.iter().rev() {
-                let preview: String = m.content.chars().take(200).collect();
-                let ellipsis = if preview.len() < m.content.len() { "…" } else { "" };
-                let tokens = m.token_count.map(|t| format!(" ({} tok)", t)).unwrap_or_default();
-                lines.push(format!(
-                    "> **{}**{} · {}",
-                    m.role,
-                    tokens,
-                    m.created_at.as_deref().unwrap_or("?"),
-                ));
-                lines.push(format!("> {}", preview.replace('\n', "\\n")));
-                lines.push(format!("{ellipsis}>"));
-            }
-            Ok(lines)
-        }
+/// Get memory info: (total_mb, used_mb). Returns (0,0) on failure.
+fn get_memory_info() -> (u64, u64) {
+    if cfg!(target_os = "macos") {
+        let total = std::process::Command::new("sysctl")
+            .args(["-n", "hw.memsize"])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .and_then(|s| s.trim().parse::<u64>().ok());
 
-        "token" => {
-            let days = parse_opt(args, 0, 7, "days")?;
-            let rows = storage.token_usage_daily(days).map_err(|e| e.to_string())?;
-            let (total_in, total_out) = storage.total_tokens(days).map_err(|e| e.to_string())?;
-            if rows.is_empty() {
-                return Ok(vec![format!("🤖 No token usage recorded in the last {days} days.")]);
-            }
-            let mut lines = vec![
-                format!("🤖 **Token usage — last {days} days**"),
-                "".into(),
-                "| Date | Model | Input | Output |".into(),
-                "|---|---|---:|---:|".into(),
-            ];
-            for r in &rows {
-                lines.push(format!("| {} | {} | {} | {} |", r.date, r.model, r.input_tokens, r.output_tokens));
-            }
-            lines.push("".into());
-            lines.push(format!("🤖 **Total:** {} input / {} output tokens", total_in, total_out));
-            Ok(lines)
-        }
+        let vm = std::process::Command::new("vm_stat")
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok());
 
-        "audit" => {
-            let count = parse_opt(args, 0, 10, "count")?;
-            let events = storage.recent_audit(count).map_err(|e| e.to_string())?;
-            if events.is_empty() {
-                return Ok(vec!["🤖 No audit events found.".into()]);
-            }
-            let mut lines = vec![format!("🤖 **Recent audit log** (last {})", events.len()), String::new()];
-            for ev in &events {
-                let (ts, label) = match ev {
-                    AuditEvent::CommandExec { ts, cmd, risk, result, .. } => {
-                        let ok = matches!(result, arcc_storage::audit::types::ExecResult::Ok);
-                        let icon = if ok { "✅" } else { "❌" };
-                        (ts.as_str(), format!("{icon} cmd  `{cmd}`  ({risk:?})"))
-                    }
-                    AuditEvent::CommandBlocked { ts, cmd, reason, .. } => {
-                        (ts.as_str(), format!("🚫 blocked  `{cmd}`  ({reason})"))
-                    }
-                    AuditEvent::McpToolCall { ts, tool, result, .. } => {
-                        let ok = matches!(result, arcc_storage::audit::types::ExecResult::Ok);
-                        let icon = if ok { "✅" } else { "❌" };
-                        (ts.as_str(), format!("{icon} mcp  `{tool}`"))
-                    }
-                    AuditEvent::HumanConfirm { ts, action, decision, .. } => {
-                        let icon = matches!(decision, arcc_storage::audit::types::ConfirmDecision::Approved).then_some("👤✅").unwrap_or("👤❌");
-                        (ts.as_str(), format!("{icon}  {action}  ({decision:?})"))
-                    }
-                };
-                let short_ts = if ts.len() > 19 { &ts[..19] } else { ts };
-                lines.push(format!("  `{short_ts}`  {label}"));
-            }
-            Ok(lines)
-        }
+        if let (Some(total_bytes), Some(ref vm_out)) = (total, vm) {
+            let page_size = vm_out
+                .lines()
+                .next()
+                .and_then(|l| l.split("page size of ").nth(1))
+                .and_then(|s| s.split(" bytes").next())
+                .and_then(|s| s.trim().parse::<u64>().ok())
+                .unwrap_or(16384);
 
-        "summary" => {
-            let session_id = args.first().ok_or("usage: `/data summary <session-id>`")?;
-            match storage.latest_summary(session_id).map_err(|e| e.to_string())? {
-                None => Ok(vec![format!("🤖 No summary for session `{session_id}`.")]),
-                Some(s) => Ok(vec![
-                    format!("🤖 **Conversation summary** (session `{}`)", &session_id[..8.min(session_id.len())]),
-                    "".into(),
-                    format!("> {}", s.summary_text.replace('\n', "\n> ")),
-                    "".into(),
-                    format!("🤖 Compressed at: {}", s.compressed_at.as_deref().unwrap_or("?")),
-                ]),
-            }
-        }
+            let active = parse_vm_val(vm_out, "Pages active:");
+            let wired = parse_vm_val(vm_out, "Pages wired down:");
+            let compressed = parse_vm_val(vm_out, "Pages occupied by compressor:");
 
-        _ => {
-            Ok(vec![
-                "🤖 **`/data` subcommands**".into(),
-                "".into(),
-                "| Command | Description |".into(),
-                "|---|---|".into(),
-                "| `/data sessions [limit]` | List recent sessions |".into(),
-                "| `/data messages <id> [limit]` | Show session messages |".into(),
-                "| `/data token [days]` | Token consumption summary |".into(),
-                "| `/data audit [count]` | Recent audit log entries |".into(),
-                "| `/data summary <id>` | Show compressed summary |".into(),
-            ])
+            let used_bytes = (active + wired + compressed) * page_size;
+            return (total_bytes / 1_048_576, used_bytes / 1_048_576);
+        }
+    } else if cfg!(target_os = "linux")
+        && let Ok(content) = std::fs::read_to_string("/proc/meminfo")
+    {
+        let total_kb = parse_proc_val(&content, "MemTotal:");
+        let avail_kb = parse_proc_val(&content, "MemAvailable:");
+        if let (Some(t), Some(a)) = (total_kb, avail_kb) {
+            return (t / 1024, (t - a) / 1024);
         }
     }
+    (0, 0)
+}
+
+fn parse_vm_val(output: &str, key: &str) -> u64 {
+    output
+        .lines()
+        .find(|l| l.contains(key))
+        .and_then(|l| l.split(':').nth(1))
+        .and_then(|s| s.trim().trim_end_matches('.').parse::<u64>().ok())
+        .unwrap_or(0)
+}
+
+/// Parse an RFC 3339 or SQLite timestamp and format as local `YYYY-MM-DD HH:MM:SS`.
+fn fmt_local_ts(ts: &str) -> String {
+    // RFC 3339 with timezone (e.g. "2026-06-11T01:26:37.630464Z")
+    if let Ok(dt) = ts.parse::<chrono::DateTime<chrono::Utc>>() {
+        return dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string();
+    }
+    // SQLite format (no timezone — interpret as UTC)
+    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(ts, "%Y-%m-%d %H:%M:%S") {
+        let utc: chrono::DateTime<chrono::Utc> =
+            chrono::DateTime::from_naive_utc_and_offset(dt, chrono::Utc);
+        return utc.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string();
+    }
+    // Fallback: return as-is (strip T if present)
+    ts.replace('T', " ")
+}
+
+fn parse_proc_val(content: &str, key: &str) -> Option<u64> {
+    content
+        .lines()
+        .find(|l| l.starts_with(key))
+        .and_then(|l| l.split_whitespace().nth(1))
+        .and_then(|s| s.parse::<u64>().ok())
+}
+
+// ── Live system monitor ─────────────────────────────────────────────
+
+/// Stop the background monitor task if running.
+fn stop_monitor(handle: &mut Option<tokio::task::JoinHandle<()>>) {
+    if let Some(h) = handle.take() {
+        h.abort();
+    }
+}
+
+/// Start a background task that collects CPU/memory/network every 2 s.
+fn start_monitor(
+    handle: &mut Option<tokio::task::JoinHandle<()>>,
+    tx: mpsc::UnboundedSender<crate::event::loop_event::AppEvent>,
+) {
+    stop_monitor(handle);
+    let core_count = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    *handle = Some(tokio::spawn(async move {
+        let mut prev_rx = 0u64;
+        let mut prev_tx = 0u64;
+        let mut first = true;
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+        // Small initial delay so first render gets data promptly
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        loop {
+            interval.tick().await;
+
+            // ── CPU (total % across all processes, normalized to 0-100) ──
+            let (cpu_pct, mem_pct, rx_bytes, tx_bytes) =
+                tokio::task::spawn_blocking(move || {
+                    let c = get_live_cpu(core_count);
+                    let m = get_live_mem();
+                    let (rx, tx) = get_live_net();
+                    (c, m, rx, tx)
+                })
+                .await
+                .unwrap_or((0.0, 0.0, 0, 0));
+            let (rx_rate, tx_rate) = if first {
+                first = false;
+                prev_rx = rx_bytes;
+                prev_tx = tx_bytes;
+                (0.0, 0.0)
+            } else {
+                let dt = 2.0f64; // 2 s interval
+                let r = rx_bytes.saturating_sub(prev_rx) as f64 / dt;
+                let t = tx_bytes.saturating_sub(prev_tx) as f64 / dt;
+                prev_rx = rx_bytes;
+                prev_tx = tx_bytes;
+                (r, t)
+            };
+
+            let _ = tx.send(crate::event::loop_event::AppEvent::LiveMetrics {
+                cpu_pct,
+                mem_pct,
+                rx_rate,
+                tx_rate,
+            });
+        }
+    }));
+}
+
+/// Get system-wide CPU usage as a percentage (0.0 – 100.0).
+fn get_live_cpu(core_count: usize) -> f64 {
+    if cfg!(target_os = "macos") {
+        let out = std::process::Command::new("ps")
+            .args(["-A", "-o", "%cpu="])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok());
+        if let Some(output) = out {
+            let total: f64 = output.lines().filter_map(|l| {
+                let s = l.trim().replace(',', ".");
+                s.parse::<f64>().ok()
+            }).sum();
+            return (total / core_count as f64).clamp(0.0, 100.0);
+        }
+    } else if cfg!(target_os = "linux") {
+        // Read /proc/stat for CPU ticks
+        if let Ok(content) = std::fs::read_to_string("/proc/stat") {
+            let line = content.lines().next().unwrap_or("");
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 5 {
+                let user: u64 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+                let nice: u64 = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
+                let system: u64 = parts.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
+                let idle: u64 = parts.get(4).and_then(|s| s.parse().ok()).unwrap_or(0);
+                let total = user + nice + system + idle;
+                if total > 0 {
+                    return (user + nice + system) as f64 / total as f64 * 100.0;
+                }
+            }
+        }
+    }
+    0.0
+}
+
+/// Get memory usage as a percentage (0.0 – 100.0).
+fn get_live_mem() -> f64 {
+    if cfg!(target_os = "macos") {
+        let total = std::process::Command::new("sysctl")
+            .args(["-n", "hw.memsize"])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .and_then(|s| s.trim().parse::<u64>().ok());
+        let vm = std::process::Command::new("vm_stat")
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok());
+        if let (Some(t), Some(ref v)) = (total, vm) {
+            let page_size = v
+                .lines().next()
+                .and_then(|l| l.split("page size of ").nth(1))
+                .and_then(|s| s.split(" bytes").next())
+                .and_then(|s| s.trim().parse::<u64>().ok())
+                .unwrap_or(16384);
+            let active = parse_vm_val(v, "Pages active:");
+            let wired = parse_vm_val(v, "Pages wired down:");
+            let compressed = parse_vm_val(v, "Pages occupied by compressor:");
+            let used = (active + wired + compressed) * page_size;
+            return (used as f64 / t as f64 * 100.0).clamp(0.0, 100.0);
+        }
+    } else if cfg!(target_os = "linux")
+        && let Ok(content) = std::fs::read_to_string("/proc/meminfo")
+    {
+        let total_kb = parse_proc_val(&content, "MemTotal:");
+        let avail_kb = parse_proc_val(&content, "MemAvailable:");
+        if let (Some(t), Some(a)) = (total_kb, avail_kb) {
+            return (t - a) as f64 / t as f64 * 100.0;
+        }
+    }
+    0.0
+}
+
+/// Get cumulative network bytes (rx, tx) for the first active non-lo interface.
+/// Finds column positions dynamically from the `netstat -ib` header line.
+fn get_live_net() -> (u64, u64) {
+    let output = std::process::Command::new("netstat")
+        .args(["-ib", "-n"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .unwrap_or_default();
+    let mut lines = output.lines();
+    // First line: header — find column indices by name
+    let header = match lines.next() {
+        Some(h) => h,
+        None => return (0, 0),
+    };
+    let hcols: Vec<&str> = header.split_whitespace().collect();
+    let ib_idx = hcols.iter().position(|&c| c.contains("Ibytes") || c.contains("ibytes"));
+    let ob_idx = hcols.iter().position(|&c| c.contains("Obytes") || c.contains("obytes"));
+    let (ib_idx, ob_idx) = match (ib_idx, ob_idx) {
+        (Some(i), Some(o)) => (i, o),
+        _ => return (0, 0),
+    };
+    for line in lines {
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        if cols.len() <= ib_idx.max(ob_idx) {
+            continue;
+        }
+        let name = cols.first().copied().unwrap_or("");
+        if name.starts_with("lo") || name.is_empty() {
+            continue;
+        }
+        let ib = cols.get(ib_idx).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+        let ob = cols.get(ob_idx).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+        if ib > 0 || ob > 0 {
+            return (ib, ob);
+        }
+    }
+    (0, 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -1139,7 +1548,7 @@ pub async fn run(ctx: SharedContext) -> anyhow::Result<()> {
 
     let (tx, rx) = crate::event::loop_event::create_event_loop();
     let mut input_handle = crate::event::handler::spawn_input_handler(tx.clone());
-    let mut app = App::new(rx, ctx);
+    let mut app = App::new(tx.clone(), rx, ctx);
 
     while app.running {
         while let Ok(event) = app.event_rx.try_recv() {
@@ -1199,6 +1608,64 @@ pub async fn run(ctx: SharedContext) -> anyhow::Result<()> {
                         app.input_buffer.clear();
                         app.character_index = 0;
                         app.status = "idle".into();
+                    } else if app.show_dashboard && app.input_buffer.trim().is_empty() {
+                        // Enter with empty input while dashboard is shown:
+                        // show messages for the selected session, then close dashboard.
+                        if let Some(ref data) = app.dashboard.clone() {
+                            let idx = app.dashboard_cursor;
+                            if idx < data.session_ids.len() {
+                                let session_id = &data.session_ids[idx];
+                                let short_id = if session_id.len() > 8 {
+                                    &session_id[..8]
+                                } else {
+                                    session_id.as_str()
+                                };
+                                app.show_dashboard = false;
+                                // Keep dashboard data cached so Esc can re-open.
+                                app.dashboard_cursor = 0;
+                                app.dashboard_scroll = 0;
+
+                                // Fetch session messages
+                                let msgs = app.ctx.storage.session_messages(session_id, 20).ok();
+                                if let Some(msgs) = msgs {
+                                    app.messages.clear();
+                                    app.messages
+                                        .push(format!("🤖 **Session `{short_id}` — last {} messages**", msgs.len()));
+                                    for m in msgs.iter().rev() {
+                                        let role_emoji = match m.role.as_str() {
+                                            "user" => "🧑",
+                                            "assistant" => "🤖",
+                                            "tool" => "⚡",
+                                            _ => "📝",
+                                        };
+                                        let raw_preview: String = m.content.chars().take(160).collect();
+                                        let ellipsis = if raw_preview.len() < m.content.len() {
+                                            "…"
+                                        } else {
+                                            ""
+                                        };
+                                        let one_line = raw_preview
+                                            .replace('\n', " ")
+                                            .replace('\r', "");
+                                        let tokens = m
+                                            .token_count
+                                            .map(|t| format!(" ({} tok)", t))
+                                            .unwrap_or_default();
+                                        let ts = m.created_at.as_deref().unwrap_or("?");
+                                        app.messages.push(format!(
+                                            "{} {} · {}{}{}",
+                                            role_emoji, one_line, ts, tokens, ellipsis,
+                                        ));
+                                    }
+                                    app.messages
+                                        .push("🤖 Press Esc to return to dashboard".into());
+                                } else {
+                                    app.messages.push("⚠ Failed to load session messages".into());
+                                }
+                                app.input_buffer.clear();
+                                app.character_index = 0;
+                            }
+                        }
                     } else {
                         app.submit(tx.clone());
                     }
@@ -1259,7 +1726,20 @@ pub async fn run(ctx: SharedContext) -> anyhow::Result<()> {
             components::render_title(f, areas[0], &session_info.0, &session_info.1, phase);
 
             components::render_status(f, areas[2], &app.status, app.tick, app.thinking_mode);
-            if app.messages.is_empty() {
+            if app.show_dashboard {
+                if let Some(ref data) = app.dashboard {
+                    components::render_dashboard(
+                        f,
+                        areas[1],
+                        data,
+                        app.dashboard_scroll,
+                        app.dashboard_cursor,
+                        &app.live_metrics,
+                    );
+                } else {
+                    components::render_chat(f, areas[1], &app.messages, app.scroll_offset);
+                }
+            } else if app.messages.is_empty() {
                 // Startup: render logo as a ratatui widget (no markdown mangle).
                 let model = app.ctx.providers.flash().map(|p| p.model_name()).unwrap_or("?");
                 logo::render_logo(f, areas[1], env!("CARGO_PKG_VERSION"), model);

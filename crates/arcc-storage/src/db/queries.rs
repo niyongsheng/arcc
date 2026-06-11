@@ -119,6 +119,11 @@ pub fn latest_summary(conn: &Connection, session_id: &str) -> Result<Option<Summ
     rows.next().transpose()
 }
 
+/// Count total messages across all sessions.
+pub fn count_messages(conn: &Connection) -> Result<i64> {
+    conn.query_row("SELECT COUNT(*) FROM messages", [], |row| row.get(0))
+}
+
 /// Total token usage across all sessions, for the last N days.
 pub fn total_tokens(conn: &Connection, days: usize) -> Result<(i64, i64)> {
     let offset = format!("-{} days", days);
@@ -128,4 +133,24 @@ pub fn total_tokens(conn: &Connection, days: usize) -> Result<(i64, i64)> {
          WHERE date >= date('now', ?1)",
     )?;
     stmt.query_row(params![offset], |row| Ok((row.get(0)?, row.get(1)?)))
+}
+
+/// Record or accumulate token usage for a session + model on today's date.
+/// Uses `ON CONFLICT` so calling it multiple times per day sums the counts.
+pub fn upsert_token_usage(
+    conn: &Connection,
+    session_id: &str,
+    model: &str,
+    input_tokens: i64,
+    output_tokens: i64,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO token_usage (date, session_id, model, input_tokens, output_tokens)
+         VALUES (date('now'), ?1, ?2, ?3, ?4)
+         ON CONFLICT(date, session_id, model) DO UPDATE SET
+             input_tokens  = input_tokens + ?3,
+             output_tokens = output_tokens + ?4",
+        params![session_id, model, input_tokens, output_tokens],
+    )?;
+    Ok(())
 }

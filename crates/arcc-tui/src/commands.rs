@@ -55,9 +55,9 @@ pub static COMMANDS: &[Cmd] = &[
         cat: Category::Tools,
     },
     Cmd {
-        name: "data",
-        desc: "View persisted data: sessions, messages, tokens, audit, summary",
-        usage: "/data <sub> [args]",
+        name: "dashboard",
+        desc: "Interactive dashboard with sessions, tokens, audit, and system info",
+        usage: "/dashboard",
         cat: Category::System,
     },
     Cmd {
