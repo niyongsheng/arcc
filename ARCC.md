@@ -1,59 +1,61 @@
 ## Project Overview
-ARCC is a three-in-one AI assistant for the terminal: a **ClaudeCode‑like TUI**, a **pipe‑friendly CLI**, and a **server** (A2A/IM bridge). It targets developers who want an interactive coding agent or a lightweight, local‑first AI interface. The tech stack is Rust 2024, with `ratatui`/`crossterm` for the TUI, `axum` for the HTTP server, `rusqlite` for session storage, and the DeepSeek API (V4 Pro & Flash) as the model backend.
+ARCC (AI Rust Claude CLI) is a three-in-one personal AI assistant. It offers an interactive TUI clone of Claude Code, a single-shot CLI for pipe-friendly automation, and an Axum-based server with Feishu IM integration. The core uses DeepSeek-V4 (Pro and Flash) models for reasoning, shell command execution, and MCP tool use, guarded by an allowlist-based safety engine. Built in Rust with Tokio async, SQLite storage, and TOML configuration, it targets developers who want a fast, self-hosted AI coding sidekick.
 
 ## Quick Start
 ```bash
-# Install
-curl -fsSL https://raw.githubusercontent.com/niyongsheng/arcc/main/scripts/install.sh | bash
-
-# Set API key (edit ~/.arcc/config.toml or copy config/config.toml)
-mkdir -p ~/.arcc
-echo '[model]' > ~/.arcc/config.toml
-echo 'api_key = "sk-..."' >> ~/.arcc/config.toml
-
-# Build from source (if you cloned the repo)
+# build
 cargo build --release
 
-# Run
-cargo run -- tui          # TUI agent
-cargo run -- cli "Hi"     # one‑shot chat
-cargo run -- server --daemon   # HTTP server
+# run TUI (default)
+./target/release/arcc tui
+
+# one-shot CLI query
+./target/release/arcc cli "explain this error"
+
+# start server in daemon mode
+./target/release/arcc server --daemon
 ```
+Before running, create `~/.arcc/config.toml`:
+```toml
+[model]
+api_key = "sk-your-deepseek-key"
+```
+Or export `ARCC_API_KEY=sk-...`.
 
 ## Repo Anatomy
-- `crates/arcc-core` — Domain logic: model provider, safety engine, session management, tool executor.
-- `crates/arcc-storage` — Persistence layer: SQLite schema, config loader, audit logging.
-- `crates/arcc-server` — `axum` HTTP server, exposes chat endpoints and Feishu SSE integration.
-- `crates/arcc-tui` / `crates/arcc-cli` — User‑facing interfaces; `arcc-tui` holds the full TUI app, `arcc-cli` a lightweight one‑shot runner.
-- `src/main.rs` — Entry point binary `arcc` that dispatches to the correct mode via `clap`.
-- `config/` — Reference configuration; `docs/` — detailed design notes (e.g., DSML handling, interactive password handling).
+- `src/main.rs` – entry point; dispatches to `tui`, `cli`, or `server` subcommands via `clap`.
+- `crates/arcc-core` – AI logic: model providers, session manager, safety engine, tool executor.
+- `crates/arcc-storage` – persistence: SQLite sessions/messages, TOML config, JSONL audit logs.
+- `crates/arcc-server` – HTTP server (`axum`), SSE chat, Feishu bot webhook.
+- `crates/arcc-tui` – Terminal UI (`ratatui` + `crossterm`) for interactive coding.
+- `crates/arcc-cli` – One-shot CLI with PTY for sudo prompts, pipeable output.
 
 ## Intelligent Conventions
-- **Async runtime**: `tokio` (full features) – all I/O runs on a multi‑threaded scheduler.
-- **Error handling**: crate‑specific errors use `thiserror`; binaries and higher‑level glue use `anyhow` for ergonomic context.
-- **Naming**: internal crates use the `arcc-*` prefix; module structure mirrors crate boundaries.
-- **Testing**: tests live in `<crate>/tests/` (e.g., `crates/arcc-core/tests`). Run a subset with `cargo test -p arcc-core`.
-- **Observability**: structured logging via `tracing` with `tracing-subscriber` (env‑filter for RUST_LOG, JSON output). Prometheus metrics are exported by the server using `metrics-exporter-prometheus`.
-- **Git conventions**: Commits follow `<type>: <description>`; `feat:`, `fix:`, `chore:`, `docs:`, `perf:`, `refactor:`. No formal PR template.
+- **Error handling**: `thiserror` in libraries, `anyhow` in binaries; `?` for propagation.
+- **Async**: Tokio multi-threaded runtime; `async_trait`, `tokio::spawn`, `tokio_stream::StreamExt`.
+- **Naming**: modules/files snake_case, structs/enums CamelCase, functions snake_case.
+- **Logging**: `tracing` with env-filter; set `RUST_LOG=arcc=debug` for verbose output.
+- **Tests**: unit tests in `#[cfg(test)] mod`; integration tests in `tests/` directories. Run with `cargo test -p arcc-core`.
+- **Git**: conventional commits (`feat:`, `fix:`, `refactor:`); feature branches; PRs get squash-merged.
 
 ## Design Decisions
-- **Dual‑model dispatch**: The system prompt instructs the AI to classify user intent, then route to DeepSeek‑V4‑Flash for fast dialogue or Pro for complex reasoning. This is implemented inside `arcc-core`’s model provider.
-- **Context compression**: After every AI response, the session manager trims message history to stay under `context_max_tokens` (currently 800k). This avoids unbounded token growth and is triggered automatically (see `core` session logic).
-- **ARCC.md generation (`/init` command)**: The assistant analyzes the working directory and writes a project‑specific `ARCC.md`. The content is streamed in‑stream to the TUI to show progress.
-- **SQLite with bundled**: The `rusqlite` feature `bundled` compiles SQLite statically, eliminating external library dependencies.
-- **Server mode** is meant to run as a daemon (systemd/launchd) and integrates with Feishu IM via SSE; the `arcc server --daemon` flag writes a PID file and logs to `~/.arcc/server.log`.
-- **PTY handling**: The CLI mode uses `portable-pty` for true terminal emulation when running interactive commands.
-- **Safety engine**: A built‑in allowlist and risk‑rating filter all tool calls; this is configured via `config.toml`.
+- **Crate split**: `arcc-core` is the pure domain; `arcc-storage` handles I/O; UI and entry crates keep dependencies minimal.
+- **DeepSeek model selection**: cost/performance sweet spot; model ID configurable via `config.toml` (`model.id`).
+- **Safety**: tool allowlist (`crates/arcc-core/src/safety.rs`) blocks dangerous commands like `rm -rf /`; risk rating attached to each execution.
+- **Session compression**: token-count-based truncation and summarisation (using `tiktoken-rs`) to fit 800k token window; configurable via `model.context_max_tokens`.
+- **Hot reload**: `config.toml` is watched by `notify`; changes take effect without restart.
+- **ARCC.md generation**: `/init` command sends codebase to the model and produces a custom `ARCC.md` with project-specific instructions (see template in `src/main.rs`).
+- **Server daemon**: uses `--daemon` flag to detach; SSE endpoint `/chat` streams assistant responses; Feishu cards sent via webhook.
 
 ## Common Pitfalls
-- **Config path**: The default config file is `~/.arcc/config.toml`. The example in `config/config.toml` must be copied and edited – forgetting to set `api_key` causes a runtime panic.
-- **High token limits**: `context_max_tokens` defaulted to 300k then bumped to 800k; ensure your DeepSeek account supports 1M tokens (the allocator reserves 20% headroom).
-- **TUI I/O during waiting states**: The TUI now accepts character input (e.g., y/n prompts) while the AI is generating, but the rendering layer requires that newline‑heavy content (reasoning traces) be collapsed to prevent display glitches.
-- **Flaky environment detection**: In CI, some tests that spawn subprocesses may fail on macOS due to SIP restrictions; run `cargo test -- --test-threads=1` in those cases.
-- **ARCC.md overwrite**: `/init` will ask for confirmation before replacing an existing `ARCC.md`. The prompt only appears during an active TUI session with a waiting state.
+- **Missing API key**: panics at startup. Set env `ARCC_API_KEY` or `~/.arcc/config.toml`.
+- **SQLite concurrency**: only one writer allowed; avoid running multiple server/TUI instances against the same database path.
+- **TUI resizing**: ensure terminal supports true color and resize events; erratic rendering if unsupported.
+- **PTY on Windows**: `arcc cli` may fail on non-Unix due to `portable-pty` limitations; prefer WSL.
+- **Context overflow**: generating `ARCC.md` for large projects may exceed model context; raise `context_max_tokens` or pre-exclude heavy files.
 
 ## Notice
-- **CLI interface**: `arcc cli "<prompt>"` writes the final answer to stdout (pipeable) and logs to stderr. It reads stdin if no prompt is given.
-- **Server endpoints**: By default `arcc server` listens on `0.0.0.0:8080`. Key endpoints are `/api/chat` (JSON POST) and `/api/chat/stream` (SSE). A health check is at `/health`.
-- **TUI keyboard shortcuts**: `Ctrl+N` new session, `Ctrl+C` exit (confirm required), `/init` triggers project analysis, `/compress` manually compresses context.
-- **ARCC.md schema**: The assistant will ask you to modify `ARCC.md` – the document structure is the same as this file, with sections for Overview, Quick Start, Repo Anatomy, etc.
+- `/init` in TUI creates/overwrites `ARCC.md` in the current working directory.
+- Server health check: `GET /health`.
+- CLI accepts `--file <path>` for context file and `--model pro|flash` to select variant.
+- All model interactions are logged to `~/.arcc/audit.log` as JSON Lines.

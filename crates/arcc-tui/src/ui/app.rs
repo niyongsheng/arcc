@@ -1232,7 +1232,7 @@ impl App {
                     tokio::spawn(async move {
                         if let Ok(Some(answer)) = resp_rx.await {
                             if answer == "y" || answer == "yes" {
-                                let _ = tx.send(AppEvent::Token("🤖 Re-generating ARCC.md...".into()));
+                                let _ = tx.send(AppEvent::ToolExec("generating ARCC.md...".into()));
                                 let cwd = std::env::current_dir().unwrap_or_default();
                                 let root = std::process::Command::new("git")
                                     .args(["rev-parse", "--show-toplevel"])
@@ -1748,7 +1748,7 @@ async fn run_project_init(ctx: SharedContext, tx: mpsc::UnboundedSender<AppEvent
 Write ONLY the ARCC.md content, no extra commentary, no section if it would be empty. Use clean markdown. Be specific — prefer concrete file paths, commands, and examples over generic advice."#;
 
     let mut full_content = String::new();
-    let _ = tx.send(AppEvent::Token("\n\n".into()));
+    let _ = tx.send(AppEvent::Status("generating ARCC.md...".into()));
 
     if let Some(prov) = provider {
         let init_system = arcc_core::model::types::ChatMessage {
