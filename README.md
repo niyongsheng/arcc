@@ -15,9 +15,9 @@
 
 | Mode | Command | Use Case |
 |------|---------|----------|
-| **TUI** | `arcc tui` | [交互式终端教程](docs/tui-tutorial.md) |
-| **CLI** | `arcc cli "<prompt>"` | [单轮执行教程](docs/cli-tutorial.md) |
-| **Server** | `arcc server --daemon` | [HTTP 后台教程](docs/server-tutorial.md) |
+| **TUI** | `arcc tui` | [tui agent](docs/tui-tutorial.md) |
+| **CLI** | `arcc cli "<prompt>"` | [A2A pipe-friendly](docs/cli-tutorial.md) |
+| **Server** | `arcc server --daemon` | [Auto CPIS with IM](docs/server-tutorial.md) |
 
 ## Quick Start
 
