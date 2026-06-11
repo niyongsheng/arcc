@@ -60,13 +60,17 @@ pub fn spawn_input_handler(tx: mpsc::UnboundedSender<AppEvent>) -> tokio::task::
                         KeyCode::Down => {
                             let _ = tx.send(AppEvent::HistoryNext);
                         }
-                        KeyCode::Backspace => {
+                        KeyCode::Backspace if key.kind == KeyEventKind::Press
+                            || key.kind == KeyEventKind::Repeat =>
+                        {
                             let _ = tx.send(AppEvent::Input("\x08".into()));
                         }
                         KeyCode::Esc => {
                             let _ = tx.send(AppEvent::Dismiss);
                         }
-                        KeyCode::Char(ch) => {
+                        KeyCode::Char(ch) if key.kind == KeyEventKind::Press
+                            || key.kind == KeyEventKind::Repeat =>
+                        {
                             let _ = tx.send(AppEvent::Input(ch.to_string()));
                         }
                         _ => {}
