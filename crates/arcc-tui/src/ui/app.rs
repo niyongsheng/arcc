@@ -250,6 +250,13 @@ impl App {
                 if let Some(pending) = self.pending_confirm.take() {
                     let _ = pending.response_tx.send(ConfirmChoice::Reject);
                 }
+                // Trigger background context compression if session is over threshold.
+                let ctx = self.ctx.clone();
+                tokio::spawn(async move {
+                    if let Some(flash) = ctx.providers.flash() {
+                        ctx.sessions.compress_all(&**flash).await;
+                    }
+                });
             }
             AppEvent::HistoryPrev => {
                 // When dashboard is shown, move cursor up in sessions table.
