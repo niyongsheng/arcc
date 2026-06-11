@@ -15,7 +15,7 @@
 
 | Mode | Command | Multi-Turn | Tool Call | Session Persist | Script/Pipe | IM Bot |
 |------|---------|:----------:|:---------:|:---------------:|:-----------:|:------:|
-| **TUI** | `arcc tui` | ✅ | ✅ | ✅ | — | — |
+| **TUI** | `arcc tui` [doc](docs/tui-tutorial.md) | ✅ | ✅ | ✅ | — | — |
 | **CLI** | `arcc cli "<prompt>"` [doc](docs/cli-tutorial.md) | — | ✅ | — | ✅ | — |
 | **Server** | `arcc server --daemon` [doc](docs/server-tutorial.md) | ✅\* | — | ✅ | — | ✅ |
 
