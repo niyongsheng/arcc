@@ -1,37 +1,80 @@
-# ARCC CLI Skill — Claude Code MCP Integration
+# ARCC CLI Tool — AI Agent Integration
 
-Register `arcc cli` as an MCP tool in Claude Code, enabling Claude to
-execute shell commands directly through natural language.
+`arcc cli` converts natural language into shell commands, executes them,
+and returns structured results. Any AI coding agent (Claude Code, Codex,
+Cursor, Windsurf, etc.) can invoke it via a simple shell call — no MCP
+server or special configuration required.
 
-## What It Does
-
-Once registered, Claude Code gains an `arcc` tool. Just say:
-
-> "Check disk usage"
-> "Find processes on port 80"
-> "Rebase current branch onto main"
-
-Claude will invoke `arcc cli` to execute it and return the result.
-
-## Setup
-
-### 1. Verify arcc is in PATH
+## Quick Reference
 
 ```bash
-which arcc
+# Basic — ask and execute
+arcc cli --json "check disk usage"
+
+# Skip safety blocks (rm, dd, mkfs, etc.)
+arcc cli --json --unsafe "delete all .log files in /tmp"
+
+# Pipe data for analysis
+cat error.log | arcc cli --json "find the most frequent error"
 ```
 
-If not found, install arcc first.
+## Output Format
 
-### 2. Make the MCP script executable
+Every call with `--json` returns a single JSON object on stdout:
+
+```json
+{
+  "response": "Disk usage: 120GB / 256GB (47%)",
+  "tool_calls": [
+    {
+      "command": "df -h / | tail -1",
+      "status": "ok",
+      "stdout": "/dev/sda1  256G  120G  136G  47% /",
+      "stderr": "",
+      "exit_code": 0,
+      "error": null
+    }
+  ],
+  "status": "ok"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `response` | string | AI's natural-language summary |
+| `tool_calls[]` | array | Each shell command executed |
+| `tool_calls[].status` | string | `"ok"` / `"blocked"` / `"error"` |
+| `status` | string | `"ok"` / `"partial"` / `"error"` |
+
+## Integration Examples
+
+### In CLAUDE.md / Agent Instructions
+
+```markdown
+## Available Tools
+
+### arcc CLI
+
+You can execute shell commands via `arcc cli --json "description"`.
+Parse the JSON result to get the AI summary and command outputs.
+
+- Basic: `arcc cli --json "check disk usage"`
+- With unsafe flag: `arcc cli --json --unsafe "remove old files"`
+- Parsing: `arcc cli --json "..." | jq .response`
+```
+
+### Calling from Shell (any agent)
 
 ```bash
-chmod +x /path/to/arcc/bin/arcc-mcp
+# Get structured result
+result=$(arcc cli --json "find the largest files in /tmp")
+response=$(echo "$result" | jq -r '.response')
 ```
 
-### 3. Register with Claude Code
+### As an MCP Tool (Claude Code / Cursor / Windsurf)
 
-Edit `~/.claude/settings.json` (create if it doesn't exist):
+`bin/arcc-mcp` implements the MCP stdio protocol, wrapping `arcc cli`.
+Register it in your agent's MCP configuration:
 
 ```json
 {
@@ -45,115 +88,34 @@ Edit `~/.claude/settings.json` (create if it doesn't exist):
 }
 ```
 
-> **Note:** `command` must be an absolute path — Claude Code's working
-> directory may differ from the arcc project root.
+Supported tools: `arcc` with parameters `prompt` (string, required) and
+`unsafe` (boolean, optional).
 
-### 4. Restart Claude Code
+## Parameter Reference
 
-Reopen Claude Code. You should see the `arcc` tool in the MCP tool list.
+| Argument | Description |
+|----------|-------------|
+| `prompt` | Natural language task description (e.g. `"check disk usage"`) |
+| `--json` | Output a single JSON object instead of streaming tokens |
+| `--unsafe` | Skip safety allowlist — allows `rm`, `dd`, `mkfs`, `shutdown` |
+| `!command` | Run a raw shell command without LLM involvement |
 
-## Tool Definition
+## Typical Use Cases
 
-| Property | Value |
-|----------|-------|
-| **Name** | `arcc` |
-| **Description** | Converts natural language to shell commands, executes them, and returns results |
-| **Arg 1** | `prompt` (string, required) — task description in natural language |
-| **Arg 2** | `unsafe` (boolean, optional) — skip safety allowlist for dangerous commands |
-
-### Parameter Guide
-
-**prompt**: Describe what you want to do in natural language. Examples:
-
-- `"List the 10 largest files in /tmp"`
-- `"Check Docker container status"`
-- `"Verify nginx configuration syntax"`
-- `"Show unpushed commits"`
-
-**unsafe**: Set to `true` when the task may involve dangerous commands
-(`rm`, `dd`, `mkfs`, `shutdown`, etc.).
-
-## How It Works
-
-```
-Claude Code → arcc-mcp (MCP stdio server)
-                  ↓
-            arcc cli --json [--unsafe] "prompt"
-                  ↓
-            JSON response → returned to Claude Code
-```
-
-The `arcc-mcp` script:
-1. Receives MCP JSON-RPC requests via stdin
-2. Calls `arcc cli --json "prompt"`
-3. Returns the JSON result to Claude Code
-
-## Examples
-
-### System Administration
-
-```
-You: Check memory usage
-→ arcc cli --json "Check memory usage"
-→ Result: Total 16GB, 43% used ...
-
-You: Find top 5 CPU-consuming processes
-→ arcc cli --json "Find top 5 CPU-consuming processes"
-```
-
-### File Operations (requires --unsafe)
-
-```
-You: Delete all .log files in /tmp/old-logs
-→ arcc cli --json --unsafe "Delete all .log files in /tmp/old-logs"
-```
-
-### Network Diagnostics
-
-```
-You: Check network connectivity
-→ arcc cli --json "Check network connectivity"
-```
-
-### Git Operations
-
-```
-You: Show current branch status
-→ arcc cli --json "Show current git branch status"
-```
-
-## Referencing in CLAUDE.md
-
-Add to your project's `CLAUDE.md`:
-
-```markdown
-## Available Tools
-
-### arcc CLI
-
-You have access to `arcc cli` for executing shell commands via natural
-language. When you need to run terminal commands, invoke it as:
-
-```json
-{
-  "tool": "arcc",
-  "prompt": "your task description",
-  "unsafe": false
-}
-```
-
-Available as an MCP tool when registered in `~/.claude/settings.json`.
-```
+| Category | Example |
+|----------|---------|
+| System | `arcc cli --json "check memory and cpu usage"` |
+| Network | `arcc cli --json "find what's listening on port 80"` |
+| Docker | `arcc cli --json "list all running containers"` |
+| Git | `arcc cli --json "show unpushed commits"` |
+| Files | `arcc cli --json --unsafe "find and delete empty directories"` |
+| Logs | `cat app.log \| arcc cli --json "find error patterns"` |
+| Code | `arcc cli --json "generate a rust function to read toml files"` |
 
 ## Troubleshooting
 
-**"arcc command not found"** — The `arcc-mcp` script can't find the
-`arcc` binary. Either set the `ARCC` variable in the script to an
-absolute path, or ensure `arcc` is on your PATH.
+**`arcc: command not found`** — arcc is not installed or not on PATH.
 
-**Timeout** — The default timeout is 60 seconds. For long-running tasks,
-adjust the `timeout` parameter in `subprocess.run()` inside
-`bin/arcc-mcp`.
+**`unrecognized option '--json'`** — Version too old. Update to v0.3.0+.
 
-**JSON parse error** — Your `arcc cli` version is too old and doesn't
-support the `--json` flag. Upgrade to v0.3.0 or later.
+**Commands blocked** — Add `--unsafe` to skip the safety allowlist.

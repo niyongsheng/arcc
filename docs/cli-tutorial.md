@@ -16,17 +16,6 @@ cat error.log | arcc cli "分析这些日志的错误原因"
 arcc cli --json "检查网络状态"
 ```
 
-## 工作流程
-
-```
-用户输入 → LLM (DeepSeek-V4-Flash)
-  → 输出文字（流式打印）
-  → 或调用 execute_command 工具
-    → 执行 shell 命令（30s 超时，4KB 截断）
-    → 结果返回 LLM
-  → LLM 综合输出最终回复
-```
-
 ## 输出模式
 
 | 模式 | 命令 | 用途 |
@@ -78,30 +67,14 @@ arcc cli "写一个 Rust 的 LRU Cache 实现" > lru.rs
 
 ```
 
-### Claude Code / MCP 集成
+### AI Agent 集成
 
-ARCC CLI 可以通过 MCP 协议注册为 Claude Code 的工具，让 Claude
-直接通过自然语言执行 shell 命令。
+ARCC CLI 可以被任何 AI 编程助手（Claude Code、Codex、Cursor 等）直接调用。
+只需让 agent 执行 shell 命令即可：
 
-```
-你: 检查磁盘使用情况
-→ Claude 自动调用 arcc 工具
-→ arcc cli --json "检查磁盘使用情况"
-→ JSON 结果返回给 Claude → 回复你
+```bash
+# agent 内部调用（任何支持 shell 的 agent）
+arcc cli --json "检查磁盘使用情况"
 ```
 
-**配置方式**：在 `~/.claude/settings.json` 中添加：
-
-```json
-{
-  "mcpServers": {
-    "arcc": {
-      "type": "stdio",
-      "command": "/path/to/arcc/bin/arcc-mcp",
-      "args": []
-    }
-  }
-}
-```
-
-详见 [ARCC CLI MCP Skill](skills/arcc-cli.md)。
+返回的 JSON 可被 agent 解析提取结果。详见 [ARCC CLI Skill](skills/arcc-cli.md)。
