@@ -17,7 +17,7 @@ arcc tui
 │     总内存   16 GiB    使用  43%                │
 │     CPU     8 核      负载  0.8                │
 │                                               │
-│  ⚡ top -l 1 -n 5 -stats cpu,mem               │  ← 命令执行记录
+│  ⚡ top -l 1 -n 5 -stats cpu,mem              │  ← 命令执行记录
 │  exit=0                                       │
 │                                               │
 │  ◇ thinking  🧠 on  ────────────────────────  │  ← 状态栏（含动画）

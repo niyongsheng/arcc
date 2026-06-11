@@ -15,7 +15,7 @@
 
 | Mode | Command | Use Case |
 |------|---------|----------|
-| **TUI** | `arcc tui` | [tui agent](docs/tui-tutorial.md) |
+| **TUI** | `arcc tui` | [TUI Agent Tool](docs/tui-tutorial.md) |
 | **CLI** | `arcc cli "<prompt>"` | [A2A pipe-friendly](docs/cli-tutorial.md) |
 | **Server** | `arcc server --daemon` | [Auto CPIS with IM](docs/server-tutorial.md) |
 

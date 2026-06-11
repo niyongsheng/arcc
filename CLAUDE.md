@@ -336,6 +336,36 @@ pub enum CoreError {
 | `/exit` | system | 退出 ARCC |
 | `/help [cmd]` | navigation | 命令帮助 |
 
+## MCP 集成（Claude Code 调用 arcc）
+
+arcc CLI 可以通过 MCP 协议注册为 Claude Code 的工具，让 Claude 直接通过自然语言执行 shell 命令。
+
+### 注册方式
+
+在 `~/.claude/settings.json` 中添加：
+
+```json
+{
+  "mcpServers": {
+    "arcc": {
+      "type": "stdio",
+      "command": "/path/to/arcc/bin/arcc-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+`bin/arcc-mcp` 是一个 Python 脚本，实现 MCP stdio 协议，将请求转发给 `arcc cli --json`。
+
+### 工具定义
+
+- **名称**: `arcc`
+- **参数**: `prompt` (string, 必填), `unsafe` (boolean, 可选)
+- **输出**: JSON，包含 `response`(LLM回复)、`tool_calls`(执行记录)、`status`
+
+详见 [docs/skills/arcc-cli-skill.md](docs/skills/arcc-cli-skill.md)
+
 ## 关键术语
 
 - **MCP (Model Context Protocol)**：模型上下文协议，支持 stdio / SSE 通信
