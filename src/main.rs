@@ -129,6 +129,25 @@ async fn main() -> anyhow::Result<()> {
     // ---- build shared context ----
     let ctx = Arc::new(AppContext::new(registry, storage, cli.dangerously_skip_permissions));
 
+    // ---- auto-detect ARCC.md in project root ----
+    if let Ok(cwd) = std::env::current_dir() {
+        let mut dir = cwd.clone();
+        loop {
+            let arcc_md = dir.join("ARCC.md");
+            if arcc_md.exists() {
+                if let Ok(content) = std::fs::read_to_string(&arcc_md) {
+                    let mut instr = ctx.project_instructions.write().await;
+                    *instr = Some(content);
+                    tracing::info!(path = %arcc_md.display(), "loaded ARCC.md");
+                }
+                break;
+            }
+            if dir.join(".git").exists() || !dir.pop() {
+                break;
+            }
+        }
+    }
+
     // ---- dispatch ----
     match cli.command {
         Command::Tui => {

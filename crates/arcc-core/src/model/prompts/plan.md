@@ -69,7 +69,7 @@ Leverage the full markdown renderer to produce rich, structured plans:
 Example structure:
 
 ```markdown
-### Plan: Deploy Database
+## Plan: Deploy Database
 
 | Step | Action | Est. |
 |------|--------|:----:|

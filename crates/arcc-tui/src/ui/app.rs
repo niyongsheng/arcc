@@ -464,7 +464,19 @@ impl App {
             info!(session = %session_id, plan_task_len = task.len(), "plan request submitted");
         }
 
-        let plan_system = arcc_core::model::prompts::templates::plan(task).to_chat_message();
+        let plan_system = {
+            let mut msg = arcc_core::model::prompts::templates::plan(task).to_chat_message();
+            let instr = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    self.ctx.project_instructions.read().await.clone()
+                })
+            });
+            if let Some(text) = instr {
+                msg.content.push_str("\n\n## Project Instructions\n\n");
+                msg.content.push_str(&text);
+            }
+            msg
+        };
 
         let ctx = self.ctx.clone();
         let skip_permissions = self.ctx.dangerously_skip_permissions;
@@ -798,7 +810,19 @@ impl App {
         let thinking_mode = self.thinking_mode;
         let session = self.session.clone();
 
-        let system_msg = arcc_core::model::prompts::templates::tui().to_chat_message();
+        let system_msg = {
+            let mut msg = arcc_core::model::prompts::templates::tui().to_chat_message();
+            let instr = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    self.ctx.project_instructions.read().await.clone()
+                })
+            });
+            if let Some(text) = instr {
+                msg.content.push_str("\n\n## Project Instructions\n\n");
+                msg.content.push_str(&text);
+            }
+            msg
+        };
 
         let history_msgs = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current()
@@ -1182,6 +1206,69 @@ impl App {
                     start_monitor(&mut self.monitor_handle, self.event_tx.clone());
                 } else {
                     stop_monitor(&mut self.monitor_handle);
+                }
+            }
+            "init" => {
+                // Detect project root and generate ARCC.md.
+                let cwd = std::env::current_dir().unwrap_or_default();
+                let root = std::process::Command::new("git")
+                    .args(["rev-parse", "--show-toplevel"])
+                    .output()
+                    .ok()
+                    .and_then(|o| String::from_utf8(o.stdout).ok())
+                    .map(|s| s.trim().to_owned())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| cwd.to_string_lossy().to_string());
+                let path = std::path::Path::new(&root).join("ARCC.md");
+                if path.exists() {
+                    self.messages.push(format!("🤖 ARCC.md already exists at `{}`", path.display()));
+                } else {
+                    let template = r#"# ARCC Project Instructions
+
+## Project Overview
+
+<!-- Describe what this project does, its architecture, and key technologies. -->
+
+## Conventions
+
+<!-- Coding style, testing conventions, commit message format, etc. -->
+
+## Common Tasks
+
+<!--
+- How to build:
+- How to test:
+- How to run:
+-->
+
+## Notes
+
+<!-- Anything else the AI should know about this project. -->
+"#;
+                    match std::fs::write(&path, template) {
+                        Ok(_) => {
+                            self.messages.push(format!("🤖 Created `{}`", path.display()));
+                            self.messages.push("🤖 Edit it to describe your project, then reload with `/init` again.".into());
+                        }
+                        Err(e) => {
+                            self.messages.push(format!("⚠ Failed to create ARCC.md: {e}"));
+                            return;
+                        }
+                    }
+                }
+                // Load (or reload) instructions.
+                match std::fs::read_to_string(&path) {
+                    Ok(content) => {
+                        tokio::task::block_in_place(|| {
+                            tokio::runtime::Handle::current().block_on(async {
+                                *self.ctx.project_instructions.write().await = Some(content);
+                            });
+                        });
+                        self.messages.push("🤖 Project instructions loaded. Start a new conversation to apply them.".into());
+                    }
+                    Err(e) => {
+                        self.messages.push(format!("⚠ Failed to read ARCC.md: {e}"));
+                    }
                 }
             }
             "exit" | "quit" => {

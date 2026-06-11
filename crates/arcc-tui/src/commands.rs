@@ -55,6 +55,12 @@ pub static COMMANDS: &[Cmd] = &[
         cat: Category::Tools,
     },
     Cmd {
+        name: "init",
+        desc: "Generate ARCC.md with project instructions in repo root",
+        usage: "/init",
+        cat: Category::System,
+    },
+    Cmd {
         name: "dashboard",
         desc: "Interactive dashboard with sessions, tokens, audit, and system info",
         usage: "/dashboard",

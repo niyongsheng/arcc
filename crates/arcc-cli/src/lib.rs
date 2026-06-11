@@ -32,7 +32,14 @@ pub async fn run(ctx: SharedContext, prompt: &str) -> anyhow::Result<()> {
     let temperature = ctx.storage.config.model.temperature;
     let max_tokens = ctx.storage.config.model.max_output_tokens;
 
-    let system_msg = arcc_core::model::prompts::templates::cli().to_chat_message();
+    let system_msg = {
+        let mut msg = arcc_core::model::prompts::templates::cli().to_chat_message();
+        if let Some(ref text) = *ctx.project_instructions.read().await {
+            msg.content.push_str("\n\n## Project Instructions\n\n");
+            msg.content.push_str(text);
+        }
+        msg
+    };
 
     let mut messages = vec![
         system_msg,

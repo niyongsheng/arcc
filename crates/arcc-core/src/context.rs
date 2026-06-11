@@ -15,6 +15,8 @@ pub struct AppContext {
     pub dangerously_skip_permissions: bool,
     /// Runtime command allowlist, modifiable via interactive prompts.
     pub allowlist: RwLock<Allowlist>,
+    /// Project-level instructions loaded from ARCC.md in repo root.
+    pub project_instructions: RwLock<Option<String>>,
 }
 
 impl AppContext {
@@ -35,6 +37,7 @@ impl AppContext {
             storage,
             mcp: McpScheduler::new(),
             dangerously_skip_permissions,
+            project_instructions: tokio::sync::RwLock::new(None),
             allowlist: RwLock::new(allowlist),
         }
     }
