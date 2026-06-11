@@ -1,7 +1,7 @@
 # CLI 模式教程 — Shell 子代理
 
-`arcc cli` 是一个**专用的 shell 执行子代理**：接收自然语言描述，自主规划并执行
-shell 命令，返回结构化 JSON。适合被更强大的 AI Agent 调用。
+`arcc cli` 是一个**pipe-line & Agent friendly shell 执行器**：接收自然语言描述，自主规划并执行
+shell 命令，支持结构化返回JSON。
 
 ```bash
 # 自然语言 → shell 命令
@@ -47,7 +47,7 @@ result=$(arcc cli --json "检查 Docker 容器状态")
 reply=$(echo "$result" | jq -r '.response')
 ```
 
-## 从 AI Agent 调用
+## ClaudeCode 调用
 
 在 `CLAUDE.md` 或系统提示词中注册：
 
