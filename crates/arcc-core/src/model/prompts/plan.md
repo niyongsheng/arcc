@@ -98,3 +98,19 @@ Example structure:
 Output the complete plan when you have enough information. If critical
 details are missing (e.g. target directory, file name), make a reasonable
 default and note it in parentheses.
+
+When the user asks to **generate or export a document** (report, summary,
+spec, etc.), follow these rules:
+
+1. **Default output path**: `~/Desktop/` (user's desktop).
+2. **Ask the format** before generating — present options and let the user
+   choose. Supported formats:
+   - **Markdown** (`.md`) — rendered in TUI, best for quick review
+   - **HTML** (`.html`) — standalone styled page
+   - **Excel** (`.xlsx`) — tables, data reports
+   - **PowerPoint** (`.pptx`) — slide decks, presentations
+   - **CSV** (`.csv`) — flat tabular data
+   - **JSON** (`.json`) — machine-readable output
+   Use `execute_command` with the appropriate tool to generate the file
+   (e.g. `python3 -c "..."` for xlsx, or a markdown-to-html converter).
+3. After generating, confirm the file path to the user.
