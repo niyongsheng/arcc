@@ -54,10 +54,10 @@ impl FeishuClient {
         // Check cache first.
         {
             let cache = self.token_cache.read().await;
-            if let Some((token, expires_at)) = cache.as_ref() {
-                if Instant::now() < *expires_at {
-                    return Ok(token.clone());
-                }
+            if let Some((token, expires_at)) = cache.as_ref()
+                && Instant::now() < *expires_at
+            {
+                return Ok(token.clone());
             }
         }
 

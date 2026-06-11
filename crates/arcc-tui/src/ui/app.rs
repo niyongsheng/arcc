@@ -1496,11 +1496,11 @@ async fn run_project_init(ctx: SharedContext, tx: mpsc::UnboundedSender<AppEvent
     for fname in &["Cargo.toml", "package.json", "pyproject.toml", "go.mod",
                     "README.md", "Makefile", "Dockerfile", ".github/workflows"] {
         let fpath = std::path::Path::new(root).join(fname);
-        if fpath.exists() {
-            if let Ok(content) = std::fs::read_to_string(&fpath) {
-                let truncated: String = content.chars().take(2000).collect();
-                probe_parts.push(format!("\n## {fname}\n```\n{truncated}\n```"));
-            }
+        if fpath.exists()
+            && let Ok(content) = std::fs::read_to_string(&fpath)
+        {
+            let truncated: String = content.chars().take(2000).collect();
+            probe_parts.push(format!("\n## {fname}\n```\n{truncated}\n```"));
         }
     }
 
@@ -1640,8 +1640,11 @@ pub async fn run(ctx: SharedContext) -> anyhow::Result<()> {
             match event {
                 AppEvent::Input(ch) if ch == "\n" || ch == "\r" => {
                     // If a tree block is focused and input is empty, cycle its view mode.
-                    if app.input_buffer.trim().is_empty() && app.focused_tree.is_some() {
-                        let hash = app.focused_tree.unwrap();
+                    if app.input_buffer.trim().is_empty() {
+                        let hash = match app.focused_tree {
+                            Some(h) => h,
+                            None => continue,
+                        };
                         let mut reg = app.tree_registry.lock().unwrap();
                         if let Some(entry) = reg.get_mut(&hash) {
                             entry.mode = match entry.mode {

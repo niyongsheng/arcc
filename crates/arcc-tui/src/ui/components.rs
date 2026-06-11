@@ -177,16 +177,16 @@ impl RenderHooks for TreeAwareHooks {
 
         // Look up or create a registry entry.
         let mut reg = self.registry.lock().unwrap();
-        if !reg.contains_key(&hash) {
-            if let Some(entry) = self.cache_block(lang, code) {
-                reg.insert(hash, entry);
-            } else {
-                // Invalid JSON/TOML — fall through to syntax highlighting.
-                return self.highlight.render_code_block(lang, code);
+        let entry = match reg.entry(hash) {
+            std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+            std::collections::hash_map::Entry::Vacant(e) => {
+                match self.cache_block(lang, code) {
+                    Some(entry) => e.insert(entry),
+                    // Invalid JSON/TOML — fall through to syntax highlighting.
+                    None => return self.highlight.render_code_block(lang, code),
+                }
             }
-        }
-
-        let entry = reg.get(&hash).unwrap();
+        };
         let lines = match entry.mode {
             TreeViewMode::Collapsed => &entry.collapsed_lines,
             TreeViewMode::Expanded => &entry.expanded_lines,
