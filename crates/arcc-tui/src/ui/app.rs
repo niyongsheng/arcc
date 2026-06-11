@@ -241,6 +241,10 @@ impl App {
                 self.status = components::status::IDLE.into();
                 self.blink = 0;
                 self.reasoning_content.clear();
+                // Clear input buffer — stray chars from subprocess /dev/tty leaks
+                // (e.g. sudo "Password:") may have arrived after status changed.
+                self.input_buffer.clear();
+                self.character_index = 0;
                 if let Some(pending) = self.pending_prompt.take() {
                     let _ = pending.response_tx.send(None);
                 }
