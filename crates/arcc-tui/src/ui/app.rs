@@ -185,7 +185,11 @@ impl App {
                     }
                 }
             }
-            AppEvent::Input(_ch) if self.status != "idle" => {
+            AppEvent::Input(_ch)
+                if self.status != "idle"
+                    && self.status != "waiting"
+                    && self.status != "waiting..." =>
+            {
                 // AI is executing — discard stray keystrokes that may come
                 // from subprocesses writing to /dev/tty (e.g. sudo password
                 // prompts leaking through the TUI's raw-mode input handler).
