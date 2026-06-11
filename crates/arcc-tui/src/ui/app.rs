@@ -255,11 +255,11 @@ impl App {
                 let ctx = self.ctx.clone();
                 let tx = self.event_tx.clone();
                 tokio::spawn(async move {
-                    let _ = tx.send(AppEvent::ToolExec("compressing context...".into()));
+                    let _ = tx.send(AppEvent::Status("compressing...".into()));
                     if let Some(flash) = ctx.providers.flash() {
                         ctx.sessions.compress_all(&**flash).await;
                     }
-                    let _ = tx.send(AppEvent::ToolExec("compression done".into()));
+                    let _ = tx.send(AppEvent::Status("idle".into()));
                 });
             }
             AppEvent::HistoryPrev => {
@@ -419,6 +419,9 @@ impl App {
             }
             AppEvent::InteractiveCommand { .. } => {
                 // Handled in the main event loop (needs terminal access).
+            }
+            AppEvent::Status(text) => {
+                self.status = text;
             }
         }
     }

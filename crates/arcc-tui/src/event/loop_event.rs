@@ -61,6 +61,8 @@ pub enum AppEvent {
         rx_rate: f64,
         tx_rate: f64,
     },
+    /// Set the status text (e.g. "compressing...") for the status bar.
+    Status(String),
     /// Dismiss current overlay (dashboard, etc.)
     Dismiss,
 }

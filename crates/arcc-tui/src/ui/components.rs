@@ -279,6 +279,7 @@ fn spinner_char(status: &str, tick: u64) -> char {
         "thinking" | "loading" | "planning" => FluxFrames::CLASSIC,
         "streaming" => FluxFrames::BOUNCE,
         "executing" => FluxFrames::LINE,
+        "compressing" | "compressing..." => FluxFrames::ORBIT,
         "waiting" | "waiting..." => FluxFrames::DIAMOND,
         _ => return ' ',
     };
@@ -290,7 +291,7 @@ fn status_color(status: &str) -> Color {
     match status {
         "idle" | "connected" => CLR_STATUS_IDLE,
         "thinking" | "loading" | "planning" => CLR_STATUS_BUSY,
-        "streaming" | "executing" => CLR_STATUS_STREAM,
+        "streaming" | "executing" | "compressing" | "compressing..." => CLR_STATUS_STREAM,
         "waiting" | "waiting..." => CLR_STATUS_BUSY,
         "error" => CLR_STATUS_ERR,
         _ => CLR_TOOL,
