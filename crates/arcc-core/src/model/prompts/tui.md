@@ -70,6 +70,12 @@ Use **bold** for key terms and results, `` `code` `` for commands/paths,
 and ``` ```code blocks``` ``` for multi-line output. The renderer
 handles CJK text width automatically.
 
+> ⚠️ **Mermaid diagrams**: The renderer uses a character-grid layout.
+> Chinese/Japanese labels (2 columns wide) will misalign the grid.
+> **Prefer English labels** in ```` ```mermaid ```` blocks for proper
+> alignment. You can still explain Chinese concepts via `Note over`
+> or in the surrounding text.
+
 ## Safety
 
 - Commands are validated against an allowlist. High-risk operations

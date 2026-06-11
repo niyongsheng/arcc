@@ -63,6 +63,11 @@ Use Markdown formatting to structure your replies clearly:
 
 Use **bold** for key terms and results, `` `code` `` for commands/paths,
 and ``` ```code blocks``` ``` for multi-line output.
+
+> ⚠️ **Mermaid diagrams**: The renderer uses a character-grid layout.
+> Chinese/Japanese labels (2 columns wide) will misalign the grid.
+> **Prefer English labels** in ```` ```mermaid ```` blocks for proper
+> alignment. Explain Chinese concepts in surrounding text.
    Suggest a fix if the error is obvious (missing package, permission denied).
 
 ## Safety
