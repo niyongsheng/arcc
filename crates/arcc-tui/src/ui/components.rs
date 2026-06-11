@@ -10,6 +10,8 @@ use ratatui::{
 };
 use ratatui_markdown::markdown::MarkdownRenderer;
 use ratatui_markdown::theme::ThemeConfig;
+use ratatui_markdown::highlight::{HighlightHooks, TreeSitterHighlighter};
+use std::sync::{Arc, LazyLock};
 use tui_spinner::FluxFrames;
 use crate::commands;
 
@@ -93,7 +95,13 @@ pub fn render_chat(f: &mut Frame, area: Rect, messages: &[String], scroll_offset
         }
     }
 
-    let renderer = MarkdownRenderer::new(area.width as usize);
+    let renderer = {
+        static HIGHLIGHTER: LazyLock<Arc<TreeSitterHighlighter>> =
+            LazyLock::new(|| Arc::new(TreeSitterHighlighter::new()));
+        let hooks = HighlightHooks::new(HIGHLIGHTER.clone(), area.width as usize);
+        MarkdownRenderer::new(area.width as usize)
+            .with_render_hooks(Box::new(hooks))
+    };
     let blocks = renderer.parse(&text);
     let lines = renderer.render(&blocks, &ThemeConfig::default());
     let total_lines = lines.len();
