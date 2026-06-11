@@ -11,22 +11,82 @@ VERSION="${1:-latest}"
 ARCH="$(uname -m)"
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 
-case "$OS-$ARCH" in
-  darwin-arm64)  TARGET="aarch64-apple-darwin" ;;
-  darwin-x86_64)
-    echo "ℹ️  Intel Mac: building from source..."
-    if command -v cargo &>/dev/null; then
-      git clone https://github.com/niyongsheng/arcc.git /tmp/arcc-build
-      cd /tmp/arcc-build && cargo build --release && sudo mv target/release/arcc /usr/local/bin/
-      rm -rf /tmp/arcc-build
-      echo "✅ Built from source!"
-      arcc --help && exit 0
-    else
-      echo "❌ Intel Mac: install Rust first: https://rustup.rs"
+# ---- source build helper ----
+build_from_source() {
+  local reason="$1"
+  echo "ℹ️  $reason"
+  echo "   Building from source..."
+  if ! command -v cargo &>/dev/null; then
+    echo "❌ Rust not found. Install it first: https://rustup.rs"
+    exit 1
+  fi
+  local tmpdir
+  tmpdir=$(mktemp -d)
+  trap "rm -rf $tmpdir" EXIT
+  git clone --depth 1 https://github.com/niyongsheng/arcc.git "$tmpdir"
+  cd "$tmpdir" && cargo build --release
+  BINARY="target/release/arcc"
+  if [ ! -f "$BINARY" ]; then
+    echo "❌ Build failed"
+    exit 1
+  fi
+  install_binary "$BINARY" "built from source"
+}
+
+# ---- binary installation helper ----
+install_binary() {
+  local src="$1"
+  local label="$2"
+
+  if [ -w /usr/local/bin ]; then
+    mv "$src" /usr/local/bin/arcc
+    echo "✅ Installed to /usr/local/bin/arcc ($label)"
+  elif [ -w "$HOME/.local/bin" ] || mkdir -p "$HOME/.local/bin" 2>/dev/null; then
+    mv "$src" "$HOME/.local/bin/arcc"
+    echo "✅ Installed to $HOME/.local/bin/arcc ($label)"
+    case ":$PATH:" in
+      *:"$HOME/.local/bin":*) ;;
+      *) echo "⚠️  Add to your shell: export PATH=\"\$HOME/.local/bin:\$PATH\"" ;;
+    esac
+  else
+    sudo mv "$src" /usr/local/bin/arcc 2>/dev/null || {
+      echo "❌ Cannot install. Try: sudo mv $src /usr/local/bin/arcc"
       exit 1
-    fi
+    }
+    echo "✅ Installed to /usr/local/bin/arcc ($label, with sudo)"
+  fi
+}
+
+# ---- platform dispatch ----
+case "$OS-$ARCH" in
+  darwin-arm64)
+    TARGET="aarch64-apple-darwin"
     ;;
-  linux-x86_64)  TARGET="x86_64-unknown-linux-gnu" ;;
+  darwin-x86_64)
+    build_from_source "Intel Mac — no pre-built binary available."
+    arcc --help && exit 0
+    ;;
+  linux-x86_64)
+    TARGET="x86_64-unknown-linux-gnu"
+    # Check glibc version — the pre-built binary links against glibc from
+    # the GitHub Actions runner (ubuntu-latest, glibc ~2.31+).
+    if command -v ldd &>/dev/null; then
+      GLIBC_VER=$(ldd --version 2>&1 | grep -oP 'glibc \K[0-9]+\.[0-9]+' | head -1)
+    fi
+    if [ -z "$GLIBC_VER" ]; then
+      # Non-glibc system (e.g. Alpine with musl) — build from source.
+      build_from_source "Non-glibc libc detected — musl not supported by pre-built binary."
+      arcc --help && exit 0
+    fi
+    # Compare major.minor against 2.28 (Rust 1.85+ requirement).
+    GLIBC_MAJOR="${GLIBC_VER%.*}"
+    GLIBC_MINOR="${GLIBC_VER#*.}"
+    if [ "$GLIBC_MAJOR" -lt 2 ] || { [ "$GLIBC_MAJOR" -eq 2 ] && [ "$GLIBC_MINOR" -lt 28 ]; }; then
+      build_from_source "glibc $GLIBC_VER detected — pre-built binary requires glibc ≥ 2.28."
+      arcc --help && exit 0
+    fi
+    echo "ℹ️  glibc $GLIBC_VER detected — OK"
+    ;;
   *)
     echo "❌ Unsupported platform: $OS $ARCH"
     echo "   Supported: macOS (arm64), Linux (x86_64)"
@@ -37,7 +97,7 @@ case "$OS-$ARCH" in
     ;;
 esac
 
-# Build download URL (use `/latest/download` to avoid API rate limits)
+# ---- download pre-built binary ----
 if [ "$VERSION" = "latest" ]; then
   URL="https://github.com/$REPO/releases/latest/download/arcc-$TARGET.tar.gz"
 else
@@ -48,32 +108,14 @@ echo "⬇️  Downloading ARCC ($TARGET) ..."
 TMP_DIR=$(mktemp -d)
 trap "rm -rf $TMP_DIR" EXIT
 
-# Download and extract
 curl -sL "$URL" | tar xz -C "$TMP_DIR"
 BINARY="$TMP_DIR/arcc"
 [ ! -f "$BINARY" ] && { echo "❌ Download failed"; exit 1; }
 
-# Extract version tag from redirect (HEAD request, lightweight)
+# Detect version tag from download redirect
 TAG=$(curl -sLI -o /dev/null -w '%{url_effective}' "$URL" 2>/dev/null | sed 's|.*/download/||;s|/arcc-.*||' || echo "")
 
-# Install — try /usr/local/bin first, fallback to ~/.local/bin
-if [ -w /usr/local/bin ]; then
-  mv "$BINARY" /usr/local/bin/arcc
-  echo "✅ Installed to /usr/local/bin/arcc"
-elif [ -w "$HOME/.local/bin" ] || mkdir -p "$HOME/.local/bin" 2>/dev/null; then
-  mv "$BINARY" "$HOME/.local/bin/arcc"
-  echo "✅ Installed to $HOME/.local/bin/arcc"
-  case ":$PATH:" in
-    *:"$HOME/.local/bin":*) ;;
-    *) echo "⚠️  Add to your shell: export PATH=\"\$HOME/.local/bin:\$PATH\"" ;;
-  esac
-else
-  sudo mv "$BINARY" /usr/local/bin/arcc 2>/dev/null || {
-    echo "❌ Cannot install. Try: sudo mv $BINARY /usr/local/bin/arcc"
-    exit 1
-  }
-  echo "✅ Installed to /usr/local/bin/arcc (with sudo)"
-fi
+install_binary "$BINARY" "$TAG"
 
 echo "✅ ARCC $TAG installed successfully!"
 arcc --help
