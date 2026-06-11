@@ -1209,7 +1209,7 @@ impl App {
                 }
             }
             "init" => {
-                // Detect project root and generate ARCC.md.
+                // Detect project root.
                 let cwd = std::env::current_dir().unwrap_or_default();
                 let root = std::process::Command::new("git")
                     .args(["rev-parse", "--show-toplevel"])
@@ -1221,55 +1221,134 @@ impl App {
                     .unwrap_or_else(|| cwd.to_string_lossy().to_string());
                 let path = std::path::Path::new(&root).join("ARCC.md");
                 if path.exists() {
-                    self.messages.push(format!("🤖 ARCC.md already exists at `{}`", path.display()));
-                } else {
-                    let template = r#"# ARCC Project Instructions
+                    // Already exists — just reload.
+                    match std::fs::read_to_string(&path) {
+                        Ok(content) => {
+                            tokio::task::block_in_place(|| {
+                                tokio::runtime::Handle::current().block_on(async {
+                                    *self.ctx.project_instructions.write().await = Some(content);
+                                });
+                            });
+                            self.messages.push("🤖 ARCC.md reloaded. Start a new conversation to apply.".into());
+                        }
+                        Err(e) => self.messages.push(format!("⚠ Failed to read ARCC.md: {e}")),
+                    }
+                    return;
+                }
 
-## Project Overview
+                self.status = "thinking".into();
+                self.messages.push("🤖 Analyzing project structure — this may take a moment...".into());
+                self.scroll_offset = 0;
 
-<!-- Describe what this project does, its architecture, and key technologies. -->
+                let ctx = self.ctx.clone();
+                let tx = self.event_tx.clone();
+                let arcc_path = path.clone();
+                tokio::spawn(async move {
+                    // 1. Probe the project.
+                    let _ = tx.send(AppEvent::ToolExec("probing project structure...".into()));
+                    let mut probe_parts: Vec<String> = Vec::new();
 
-## Conventions
+                    // Directory tree (top 3 levels, capped at 200 lines).
+                    let tree_out = tokio::process::Command::new("find")
+                        .args([&root, "-maxdepth", "3", "-not", "-path", "*/target/*", "-not", "-path", "*/.git/*", "-not", "-path", "*/node_modules/*"])
+                        .output()
+                        .await
+                        .ok()
+                        .and_then(|o| String::from_utf8(o.stdout).ok())
+                        .unwrap_or_default();
+                    let tree_lines: Vec<&str> = tree_out.lines().take(200).collect();
+                    probe_parts.push(format!("## Directory Tree\n```\n{}\n```", tree_lines.join("\n")));
 
-<!-- Coding style, testing conventions, commit message format, etc. -->
+                    // Key config files.
+                    for fname in &["Cargo.toml", "package.json", "pyproject.toml", "go.mod",
+                                    "README.md", "Makefile", "Dockerfile", ".github/workflows"] {
+                        let fpath = std::path::Path::new(&root).join(fname);
+                        if fpath.exists() {
+                            if let Ok(content) = std::fs::read_to_string(&fpath) {
+                                let truncated: String = content.chars().take(2000).collect();
+                                probe_parts.push(format!("\n## {fname}\n```\n{truncated}\n```"));
+                            }
+                        }
+                    }
 
-## Common Tasks
+                    // Git log (recent activity).
+                    let log_out = tokio::process::Command::new("git")
+                        .args(["-C", &root, "log", "--oneline", "-20"])
+                        .output()
+                        .await
+                        .ok()
+                        .and_then(|o| String::from_utf8(o.stdout).ok())
+                        .unwrap_or_default();
+                    if !log_out.is_empty() {
+                        probe_parts.push(format!("\n## Recent Git History\n```\n{log_out}\n```"));
+                    }
 
-<!--
-- How to build:
-- How to test:
-- How to run:
--->
+                    let probe_text = probe_parts.join("\n");
 
-## Notes
+                    // 2. Call the AI to generate ARCC.md.
+                    let _ = tx.send(AppEvent::Status("generating ARCC.md...".into()));
+                    let provider = ctx.providers.pick(probe_text.len(), false);
+                    let result = if let Some(prov) = provider {
+                        let init_system = arcc_core::model::types::ChatMessage {
+                            role: "system".into(),
+                            content: r#"You are a project analyst. Given a project's directory tree, config files, and git history, generate a concise ARCC.md file that will be used as project-level instructions for the AI assistant.
 
-<!-- Anything else the AI should know about this project. -->
-"#;
-                    match std::fs::write(&path, template) {
-                        Ok(_) => {
-                            self.messages.push(format!("🤖 Created `{}`", path.display()));
-                            self.messages.push("🤖 Edit it to describe your project, then reload with `/init` again.".into());
+The ARCC.md should include:
+- **Project Overview**: What this project does, its architecture, key technologies.
+- **Conventions**: Coding style, git conventions, testing practices.
+- **Common Tasks**: Build, test, run, deploy commands.
+- **Notes**: Anything non-obvious the AI needs to know.
+
+Write ONLY the ARCC.md content, no extra commentary. Use clean markdown."#.into(),
+                            tool_calls: None, tool_call_id: None, reasoning_content: None,
+                        };
+                        let user_msg = arcc_core::model::types::ChatMessage {
+                            role: "user".into(),
+                            content: format!("Generate an ARCC.md for this project:\n\n{probe_text}"),
+                            tool_calls: None, tool_call_id: None, reasoning_content: None,
+                        };
+                        let req = arcc_core::model::types::ChatRequest {
+                            model: prov.model_name().to_owned(),
+                            messages: vec![init_system, user_msg],
+                            tools: None,
+                            tool_choice: None,
+                            temperature: Some(0.5),
+                            max_tokens: Some(4096),
+                            stream: false,
+                            thinking_mode: None,
+                            reasoning_effort: None,
+                        };
+                        prov.chat(req).await.map(|r| r.message.content).map_err(|e| e.to_string())
+                    } else {
+                        Err("no model provider available".into())
+                    };
+
+                    // 3. Write result to ARCC.md.
+                    match result {
+                        Ok(content) => {
+                            // Strip ```md/``` fences if the AI wrapped them.
+                            let clean = content.trim()
+                                .strip_prefix("```markdown").or_else(|| content.trim().strip_prefix("```md"))
+                                .or_else(|| content.trim().strip_prefix("```"))
+                                .and_then(|s| s.strip_suffix("```"))
+                                .map(|s| s.trim())
+                                .unwrap_or(content.trim());
+                            if let Err(e) = std::fs::write(&arcc_path, clean) {
+                                let _ = tx.send(AppEvent::Token(format!("\n⚠ Failed to write ARCC.md: {e}")));
+                            } else {
+                                let _ = tx.send(AppEvent::Token(format!("\n✅ ARCC.md created at `{}`", arcc_path.display())));
+                                // Load into context.
+                                if let Ok(content) = std::fs::read_to_string(&arcc_path) {
+                                    *ctx.project_instructions.write().await = Some(content);
+                                }
+                            }
                         }
                         Err(e) => {
-                            self.messages.push(format!("⚠ Failed to create ARCC.md: {e}"));
-                            return;
+                            let _ = tx.send(AppEvent::Token(format!("\n❌ Failed to generate ARCC.md: {e}")));
                         }
                     }
-                }
-                // Load (or reload) instructions.
-                match std::fs::read_to_string(&path) {
-                    Ok(content) => {
-                        tokio::task::block_in_place(|| {
-                            tokio::runtime::Handle::current().block_on(async {
-                                *self.ctx.project_instructions.write().await = Some(content);
-                            });
-                        });
-                        self.messages.push("🤖 Project instructions loaded. Start a new conversation to apply them.".into());
-                    }
-                    Err(e) => {
-                        self.messages.push(format!("⚠ Failed to read ARCC.md: {e}"));
-                    }
-                }
+                    let _ = tx.send(AppEvent::StreamDone);
+                });
             }
             "exit" | "quit" => {
                 info!("user quit via command");
