@@ -115,12 +115,14 @@ pub async fn execute_command(
     let mut truncated = false;
 
     if stdout_str.len() > MAX_OUTPUT_BYTES {
-        stdout_str.truncate(MAX_OUTPUT_BYTES);
+        let boundary = stdout_str.floor_char_boundary(MAX_OUTPUT_BYTES);
+        stdout_str.truncate(boundary);
         stdout_str.push_str("\n... (truncated)");
         truncated = true;
     }
     if stderr_str.len() > MAX_OUTPUT_BYTES {
-        stderr_str.truncate(MAX_OUTPUT_BYTES);
+        let boundary = stderr_str.floor_char_boundary(MAX_OUTPUT_BYTES);
+        stderr_str.truncate(boundary);
         stderr_str.push_str("\n... (truncated)");
         truncated = true;
     }
