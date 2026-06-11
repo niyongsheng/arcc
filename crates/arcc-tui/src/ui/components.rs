@@ -249,7 +249,6 @@ pub fn render_chat(
             text.push('\n');
             text.push('\n');
         } else if let Some(t) = msg.strip_prefix("🧠 ") {
-            // Collapse newlines so the _..._ italic span doesn't break.
             let clean = t.replace('\n', " ");
             text.push_str(&format!("_🧠 {clean}_\n\n"));
         } else if let Some(t) = msg.strip_prefix("⚡ ") {
@@ -289,9 +288,31 @@ pub fn render_chat(
     let clamped = scroll_offset.min(max_offset);
     let skip = max_offset - clamped; // lines hidden from top
 
+    // Reserve 1 column on the right for the scrollbar when content overflows.
+    let (content_area, scrollbar_area) = if total_lines > visible {
+        let areas = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Min(1), Constraint::Length(1)])
+            .split(area);
+        (areas[0], areas[1])
+    } else {
+        (area, Rect::default())
+    };
+
     let mut paragraph = Paragraph::new(Text::from(lines));
     paragraph = paragraph.scroll((skip as u16, 0));
-    f.render_widget(paragraph, area);
+    f.render_widget(paragraph, content_area);
+
+    // Scrollbar on the right side.
+    if total_lines > visible {
+        let mut state = ScrollbarState::new(max_offset).position(skip.min(max_offset));
+        let scrollbar = Scrollbar::default()
+            .orientation(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(Some("↑"))
+            .end_symbol(Some("↓"))
+            .track_symbol(Some("│"));
+        f.render_stateful_widget(scrollbar, scrollbar_area, &mut state);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -338,7 +359,17 @@ fn status_style(status: &str) -> Style {
 /// - Unknown commands → red
 /// - Arguments after the command name → default user color
 ///   Regular input (no `/` prefix) is rendered as before.
-pub fn render_input(f: &mut Frame, area: Rect, input: &str) {
+///
+/// When `status` is a non-idle state that still accepts input (thinking/streaming),
+/// the `>` prefix is dimmed to indicate "will be queued until AI finishes".
+pub fn render_input(f: &mut Frame, area: Rect, input: &str, status: &str) {
+    // Dim the `>` prefix during non-idle states to show "queued input".
+    let prefix_color = if status == status::IDLE || status == status::WAITING {
+        CLR_INPUT_ACCENT
+    } else {
+        CLR_TOOL
+    };
+
     let spans = if let Some(rest) = input.strip_prefix('/') {
         // Command mode — highlight the command name
         let cmd_name = rest
@@ -359,20 +390,20 @@ pub fn render_input(f: &mut Frame, area: Rect, input: &str) {
 
         if known || !cmd_name.is_empty() {
             vec![
-                Span::styled("> ", Style::default().fg(CLR_INPUT_ACCENT)),
+                Span::styled("> ", Style::default().fg(prefix_color)),
                 Span::styled(cmd_part, Style::default().fg(cmd_color).add_modifier(Modifier::BOLD)),
                 Span::styled(args_part, Style::default().fg(CLR_USER)),
             ]
         } else {
             vec![
-                Span::styled("> ", Style::default().fg(CLR_INPUT_ACCENT)),
+                Span::styled("> ", Style::default().fg(prefix_color)),
                 Span::styled(input, Style::default().fg(CLR_USER)),
             ]
         }
     } else {
         // Regular input — default style
         vec![
-            Span::styled("> ", Style::default().fg(CLR_INPUT_ACCENT)),
+            Span::styled("> ", Style::default().fg(prefix_color)),
             Span::styled(input, Style::default().fg(CLR_USER)),
         ]
     };
@@ -385,7 +416,7 @@ pub fn render_input(f: &mut Frame, area: Rect, input: &str) {
 pub fn render_status(f: &mut Frame, area: Rect, status: &str, tick: u64, thinking_mode: bool) {
     let style = status_style(status);
     let thinking_tag = if thinking_mode { " 🧠 on" } else { "" };
-    let ch = if status == "idle" || status == "connected" {
+    let ch = if status == status::IDLE || status == "connected" {
         "●".to_string()
     } else {
         spinner_char(status, tick).to_string()

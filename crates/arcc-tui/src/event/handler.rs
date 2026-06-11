@@ -1,4 +1,6 @@
-use crossterm::event::{self, Event as CrosstermEvent, KeyCode, KeyEventKind};
+use crossterm::event::{
+    self, Event as CrosstermEvent, KeyCode, KeyEventKind, MouseEvent, MouseEventKind,
+};
 use tokio::sync::mpsc;
 
 use super::loop_event::AppEvent;
@@ -82,6 +84,17 @@ pub fn spawn_input_handler(tx: mpsc::UnboundedSender<AppEvent>) -> tokio::task::
                     // may include when pasting from other applications.
                     let cleaned = content.replace('\r', "");
                     let _ = tx.send(AppEvent::Input(cleaned));
+                }
+                Ok(CrosstermEvent::Mouse(MouseEvent { kind, .. })) => match kind {
+                    MouseEventKind::ScrollUp => {
+                        let _ = tx.send(AppEvent::ScrollUp(3));
+                    }
+                    MouseEventKind::ScrollDown => {
+                        let _ = tx.send(AppEvent::ScrollDown(3));
+                    }
+                    // Ignore click, drag, and move events — text selection
+                    // works by holding Shift when mouse capture is enabled.
+                    _ => {}
                 }
                 Ok(CrosstermEvent::Resize(cols, rows)) => {
                     let _ = tx.send(AppEvent::Resize { cols, rows });

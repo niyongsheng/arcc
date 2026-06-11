@@ -17,6 +17,12 @@ pub fn run(conn: &Connection) -> Result<(), rusqlite::Error> {
         conn.pragma_update(None, "user_version", 2)?;
     }
 
+    if version < 3 {
+        info!("running migration v3: session summary + input_history");
+        conn.execute_batch(MIGRATION_V3)?;
+        conn.pragma_update(None, "user_version", 3)?;
+    }
+
     Ok(())
 }
 
@@ -64,4 +70,17 @@ CREATE INDEX IF NOT EXISTS idx_summaries_session  ON summaries(session_id);
 const MIGRATION_V2: &str = r#"
 CREATE UNIQUE INDEX IF NOT EXISTS idx_token_usage_unique
     ON token_usage(date, session_id, model);
+"#;
+
+const MIGRATION_V3: &str = r#"
+ALTER TABLE sessions ADD COLUMN summary TEXT;
+
+CREATE TABLE IF NOT EXISTS input_history (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    prompt     TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_input_history_created ON input_history(created_at DESC);
 "#;

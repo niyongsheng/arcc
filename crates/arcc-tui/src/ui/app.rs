@@ -1,9 +1,12 @@
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
+use std::time::Instant;
 use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-    event::{EnableBracketedPaste, DisableBracketedPaste},
+    event::{
+        DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    },
 };
 use ratatui::layout::Position;
 use futures::StreamExt;
@@ -14,6 +17,7 @@ use chrono::Utc;
 use arcc_storage::audit::types::{Approval, AuditEvent, ExecResult, RiskLevel};
 
 use arcc_core::context::SharedContext;
+use arcc_core::model::provider::ModelProvider;
 use arcc_core::model::types::{ChatMessage, ChatRequest, StreamChunk, ToolCall};
 use arcc_core::session::Session;
 use arcc_core::tools;
@@ -24,6 +28,20 @@ use super::logo;
 use unicode_width::UnicodeWidthStr;
 
 use crate::event::loop_event::{AppEvent, PromptRequest};
+
+/// Maximum App.messages entries before oldest are pruned.
+/// Kept at 2× the render cap (MAX_VISIBLE_MSGS=80) so scroll-back
+/// still has useful range while keeping memory bounded.
+const MAX_STORED_MSGS: usize = 160;
+
+/// Time-to-live for cached dashboard data (avoids redundant subprocess calls).
+const DASHBOARD_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Cached dashboard data with a collection timestamp.
+struct DashboardCache {
+    data: components::DashboardData,
+    collected_at: Instant,
+}
 
 /// TUI application state.
 pub struct App {
@@ -72,6 +90,8 @@ pub struct App {
     // ── Dashboard overlay ──
     /// True when the full-screen dashboard replaces the chat area.
     pub show_dashboard: bool,
+    /// Cached dashboard data with TTL to avoid redundant subprocess calls.
+    dashboard_cache: Option<DashboardCache>,
     /// Pre-collected dashboard data.
     pub dashboard: Option<components::DashboardData>,
     /// Scroll offset for the sessions table within the dashboard.
@@ -99,11 +119,17 @@ impl App {
         let session = Arc::new(RwLock::new(
             arcc_core::session::Session::new("pending", "tui", "tui", context_max, None),
         ));
+        // Load recent input history from DB (best-effort, oldest-first order).
+        let loaded_history: Vec<String> = ctx.storage
+            .recent_input_history(200)
+            .ok()
+            .map(|entries| entries.into_iter().rev().map(|e| e.prompt).collect())
+            .unwrap_or_default();
         Self {
             input_buffer: String::new(),
             character_index: 0,
             messages: Vec::new(),
-            status: "idle".into(),
+            status: components::status::IDLE.into(),
             tick: 0,
             running: true,
             session,
@@ -111,7 +137,7 @@ impl App {
             reasoning_content: String::new(),
             scroll_offset: 0,
             pending_prompt: None,
-            input_history: Vec::new(),
+            input_history: loaded_history,
             history_index: 0,
             completion_candidates: Vec::new(),
             completion_index: 0,
@@ -121,6 +147,7 @@ impl App {
             init_handle: None,
             show_dashboard: false,
             dashboard: None,
+            dashboard_cache: None,
             dashboard_scroll: 0,
             dashboard_cursor: 0,
             live_metrics: components::LiveMetrics::default(),
@@ -161,17 +188,26 @@ impl App {
         match event {
             AppEvent::Input(ch) if ch == "\n" || ch == "\r" => {}
             AppEvent::Input(ch) if ch == "\x08" || ch == "\x7f" => {
-                if self.status == components::status::IDLE {
+                if self.status == components::status::IDLE
+                    || self.status == components::status::THINKING
+                    || self.status == components::status::STREAMING
+                {
                     self.delete_char();
                 }
             }
             AppEvent::Input(ch) if ch == "\x1b[D" => {
-                if self.status == components::status::IDLE {
+                if self.status == components::status::IDLE
+                    || self.status == components::status::THINKING
+                    || self.status == components::status::STREAMING
+                {
                     self.character_index = self.character_index.saturating_sub(1);
                 }
             }
             AppEvent::Input(ch) if ch == "\x1b[C" => {
-                if self.status == components::status::IDLE {
+                if self.status == components::status::IDLE
+                    || self.status == components::status::THINKING
+                    || self.status == components::status::STREAMING
+                {
                     let max = self.input_buffer.chars().count();
                     if self.character_index < max {
                         self.character_index += 1;
@@ -179,11 +215,9 @@ impl App {
                 }
             }
             AppEvent::Input(_ch)
-                if self.status != components::status::IDLE
-                    && self.status != components::status::WAITING
-                    && self.status != components::status::WAITING =>
+                if self.status == components::status::EXECUTING =>
             {
-                // AI is executing — discard stray keystrokes that may come
+                // Subprocess running — discard stray keystrokes that may come
                 // from subprocesses writing to /dev/tty (e.g. sudo password
                 // prompts leaking through the TUI's raw-mode input handler).
             }
@@ -195,7 +229,6 @@ impl App {
             }
             AppEvent::Prompt(req) => {
                 self.messages.push(req.message.clone());
-                self.messages.push(req.hint.clone());
                 self.pending_prompt = Some(req);
                 self.status = components::status::WAITING.into();
             }
@@ -243,12 +276,12 @@ impl App {
                 self.status = components::status::IDLE.into();
                 self.blink = 0;
                 self.reasoning_content.clear();
-                // Clear input buffer — stray chars from subprocess /dev/tty leaks
-                // (e.g. sudo "Password:") may have arrived after status changed.
-                self.input_buffer.clear();
-                self.character_index = 0;
+                // User may have been typing while AI was responding — preserve buffer.
+                // Only clear if a pending prompt is aborted by a new conversation.
                 if let Some(pending) = self.pending_prompt.take() {
                     let _ = pending.response_tx.send(None);
+                    self.input_buffer.clear();
+                    self.character_index = 0;
                 }
                 // Trigger background context compression if session is over threshold.
                 let ctx = self.ctx.clone();
@@ -258,7 +291,7 @@ impl App {
                     if let Some(flash) = ctx.providers.flash() {
                         ctx.sessions.compress_all(&**flash).await;
                     }
-                    let _ = tx.send(AppEvent::Status("idle".into()));
+                    let _ = tx.send(AppEvent::Status(components::status::IDLE.into()));
                 });
             }
             AppEvent::HistoryPrev => {
@@ -266,20 +299,13 @@ impl App {
                 if self.show_dashboard {
                     if self.dashboard_cursor > 0 {
                         self.dashboard_cursor -= 1;
-                        // Auto-scroll: keep cursor in view
                         if self.dashboard_cursor < self.dashboard_scroll {
                             self.dashboard_scroll = self.dashboard_cursor;
                         }
                     }
                     return;
                 }
-                // Terminal converts mouse scroll-wheel to ↑/↓. When the input
-                // buffer is empty, scroll the chat; otherwise navigate history.
-                if self.input_buffer.is_empty() {
-                    debug!("scroll up via history-prev (empty input)");
-                    self.scroll_offset = self.scroll_offset.saturating_add(3);
-                    return;
-                }
+                // ↑ always navigates history (global — use PgUp/PgDn to scroll chat).
                 debug!("history prev");
                 if self.history_index < self.input_history.len() {
                     self.history_index += 1;
@@ -295,7 +321,6 @@ impl App {
                         && self.dashboard_cursor + 1 < data.session_ids.len()
                     {
                         self.dashboard_cursor += 1;
-                        // Auto-scroll: keep cursor in view
                         let body_h = 8;
                         if self.dashboard_cursor >= self.dashboard_scroll + body_h {
                             self.dashboard_scroll = self.dashboard_cursor.saturating_sub(body_h).saturating_add(1);
@@ -303,13 +328,7 @@ impl App {
                     }
                     return;
                 }
-                // Terminal converts mouse scroll-wheel to ↑/↓. When the input
-                // buffer is empty, scroll the chat; otherwise navigate history.
-                if self.input_buffer.is_empty() {
-                    debug!("scroll down via history-next (empty input)");
-                    self.scroll_offset = self.scroll_offset.saturating_sub(3);
-                    return;
-                }
+                // ↓ always navigates history (global — use PgUp/PgDn to scroll chat).
                 debug!("history next");
                 if self.history_index > 0 {
                     self.history_index -= 1;
@@ -481,11 +500,6 @@ impl App {
             msg
         };
 
-        let ctx = self.ctx.clone();
-        let skip_permissions = self.ctx.dangerously_skip_permissions;
-        let tool_def = tools::command_tool_definition();
-        let temperature = self.ctx.storage.config.model.temperature;
-        let max_tokens = self.ctx.storage.config.model.max_output_tokens;
         let session = self.session.clone();
         let plan_system_content = plan_system.content.clone();
 
@@ -497,228 +511,19 @@ impl App {
             .chain(history_msgs)
             .collect();
 
-        let handle = tokio::spawn(async move {
-            let mut messages = initial_messages;
-            let mut phase = 1;
-
-            loop {
-                let has_tools = phase == 1;
-                let req = ChatRequest {
-                    model: provider.model_name().to_owned(),
-                    messages: messages.clone(),
-                    tools: if has_tools { Some(vec![tool_def.clone()]) } else { None },
-                    tool_choice: if has_tools { Some(serde_json::json!("auto")) } else { None },
-                    temperature: Some(temperature),
-                    max_tokens: Some(max_tokens),
-                    stream: true,
-                    thinking_mode: None,
-                    reasoning_effort: None,
-                };
-
-                let mut content_buf = String::new();
-                let mut reasoning_buf = String::new();
-                let mut tool_calls: Vec<ToolCall> = Vec::new();
-                let mut last_usage: Option<arcc_core::model::types::Usage> = None;
-
-                match provider.chat_stream(req).await {
-                    Ok(stream) => {
-                        let mut stream = Box::pin(stream);
-                        while let Some(chunk) = stream.next().await {
-                            match chunk {
-                                Ok(StreamChunk::Content(text)) => {
-                                    content_buf.push_str(&text);
-                                    let _ = tx.send(AppEvent::Token(text));
-                                }
-                                Ok(StreamChunk::Reasoning(text)) => {
-                                    reasoning_buf.push_str(&text);
-                                    let _ = tx.send(AppEvent::Reasoning(text));
-                                }
-                                Ok(StreamChunk::ToolCallStart(tc)) => {
-                                    tool_calls.push(tc);
-                                }
-                                Ok(StreamChunk::Finish(usage)) => {
-                                    last_usage = Some(usage);
-                                }
-                                Ok(StreamChunk::ToolCallEnd { .. }) => {}
-                                Err(e) => {
-                                    error!(err = %e, "stream error");
-                                    let _ = tx.send(AppEvent::Token(format!("\n ❌ stream error: {e}")));
-                                    let _ = tx.send(AppEvent::StreamDone);
-                                    return;
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        let _ = tx.send(AppEvent::Token(format!("\n ❌ {e}")));
-                        let _ = tx.send(AppEvent::StreamDone);
-                        return;
-                    }
-                }
-
-                // Record token usage from API response
-                if let Some(ref usage) = last_usage {
-                    let sid = session.read().await.id.clone();
-                    let mdl = provider.model_name().to_owned();
-                    if let Err(e) = ctx.storage.record_token_usage(
-                        &sid,
-                        &mdl,
-                        usage.prompt_tokens as i64,
-                        usage.completion_tokens as i64,
-                    ) {
-                        warn!(err = %e, "failed to record token usage");
-                    }
-                }
-
-                let has_tool_calls = !tool_calls.is_empty();
-
-                // Persist the assistant response to session.
-                {
-                    let mut s = session.write().await;
-                    let mut assistant_msg = ChatMessage {
-                        role: "assistant".into(),
-                        content: content_buf.clone(),
-                        tool_calls: if has_tool_calls { Some(tool_calls.clone()) } else { None },
-                        tool_call_id: None,
-                        reasoning_content: if reasoning_buf.is_empty() { None } else { Some(reasoning_buf.clone()) },
-                    };
-                    let tokens = provider.count_tokens(&content_buf)
-                        + provider.count_tokens(&reasoning_buf);
-                    s.push_message(assistant_msg.clone(), tokens);
-                    assistant_msg.reasoning_content = None;
-                }
-
-                if !has_tool_calls {
-                    let _ = tx.send(AppEvent::StreamDone);
-                    return;
-                }
-
-                // Execute tool calls.
-                for tc in &tool_calls {
-                    info!(tool = %tc.name, id = %tc.id, "executing tool call");
-                    let command = tc.arguments["command"].as_str().unwrap_or("").to_owned();
-                    let cmd_name = command.split_whitespace().next().unwrap_or(&command).to_string();
-                    let _ = tx.send(AppEvent::ToolExec(format!("{command}...")));
-
-                    // Interactive permission check via generic Prompt.
-                    let mut rejected = false;
-                    if !skip_permissions {
-                        let needs_confirm = ctx.allowlist.read().await.check(&command).unwrap_or(false);
-                        if needs_confirm {
-                            let (resp_tx, resp_rx) = oneshot::channel();
-                            let _ = tx.send(AppEvent::Prompt(PromptRequest {
-                                message: cow_say(&command),
-                                hint: "**[y]** approve · **[a]** allow always · **[n]** reject".into(),
-                                response_tx: resp_tx,
-                            }));
-                            let answer = resp_rx.await.unwrap_or(None);
-                            match answer.as_deref() {
-                                Some("a") | Some("always") => {
-                                    ctx.allowlist.write().await.approve(cmd_name);
-                                }
-                                Some("n") | Some("no") | None => {
-                                    rejected = true;
-                                }
-                                _ => {} // "y" / "yes" → proceed
-                            }
-                        }
-                    }
-
-                    if rejected {
-                        let mut s = session.write().await;
-                        s.push_message(ChatMessage {
-                            role: "tool".into(),
-                            content: "execution rejected by user".into(),
-                            tool_calls: None,
-                            tool_call_id: Some(tc.id.clone()),
-                            reasoning_content: None,
-                        }, 0);
-                        let _ = tx.send(AppEvent::ToolExec("✗ Rejected by user".into()));
-                        continue;
-                    }
-
-                    // Execute (skip_permissions=true because we already checked).
-                    let ai_interactive = tc.arguments.get("interactive")
-                        .and_then(|v| v.as_bool());
-                    let lower = command.to_lowercase();
-                    let words: Vec<&str> = lower.split_whitespace().collect();
-                    let first = words.first().copied().unwrap_or("");
-                    let auto_interactive = first == "sudo"
-                        || words.contains(&"sudo");
-                    let interactive = ai_interactive.unwrap_or(auto_interactive);
-                    let executed = if interactive {
-                        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                        let _ = tx.send(AppEvent::InteractiveCommand {
-                            command: command.clone(),
-                            response_tx: resp_tx,
-                        });
-                        let msg = resp_rx.await.unwrap_or_else(|_| "interactive: cancelled".to_string());
-                        let exit_code = msg.strip_prefix("exit=")
-                            .and_then(|s| s.parse::<i32>().ok());
-                        let content = format!("exit_code: {:?}\nstdout:\n(see terminal output above)\n", exit_code);
-                        Ok(tools::CommandOutput {
-                            stdout: content,
-                            stderr: String::new(),
-                            exit_code,
-                            truncated: false,
-                        })
-                    } else {
-                        let al = ctx.allowlist.read().await;
-                        let r = tools::execute_command(&command, &al, true).await;
-                        drop(al);
-                        r
-                    };
-
-                    match executed {
-                        Ok(out) => {
-                            let content = if out.stderr.is_empty() { out.stdout } else {
-                                format!("exit_code: {:?}\nstdout:\n{}\nstderr:\n{}", out.exit_code, out.stdout, out.stderr)
-                            };
-                            let tokens = provider.count_tokens(&content);
-                            let mut s = session.write().await;
-                            s.push_message(ChatMessage {
-                                role: "tool".into(),
-                                content,
-                                tool_calls: None,
-                                tool_call_id: Some(tc.id.clone()),
-                                reasoning_content: None,
-                            }, tokens);
-                            let exec_label = format!("{command} → exit={:?}", out.exit_code);
-                            let _ = tx.send(AppEvent::ToolExec(exec_label));
-                        }
-                        Err(e) => {
-                            let mut s = session.write().await;
-                            s.push_message(ChatMessage {
-                                role: "tool".into(),
-                                content: format!("error: {e}"),
-                                tool_calls: None,
-                                tool_call_id: Some(tc.id.clone()),
-                                reasoning_content: None,
-                            }, 0);
-                            let _ = tx.send(AppEvent::ToolExec(format!("{command}: {e}")));
-                        }
-                    }
-                }
-
-                // Rebuild messages for phase 2 from session.
-                messages = {
-                    let s = session.read().await;
-                    let mut base = s.prepare_for_request(true);
-                    base.retain(|m| m.role != "system");
-                    std::iter::once(ChatMessage {
-                        role: "system".into(),
-                        content: plan_system_content.clone(),
-                        tool_calls: None,
-                        tool_call_id: None,
-                        reasoning_content: None,
-                    })
-                        .chain(base)
-                        .collect()
-                };
-                phase = 2;
-            }
-        });
-        self.task_handle = Some(handle);
+        let config = ToolCallLoopConfig {
+            system_content: plan_system_content,
+            request_thinking: false,
+            thinking_mode: true,
+        };
+        self.task_handle = Some(tokio::spawn(run_tool_calling_loop(
+            provider,
+            self.session.clone(),
+            self.ctx.clone(),
+            config,
+            initial_messages,
+            tx,
+        )));
     }
 
     /// Ensure a real persisted session exists (lazy creation on first input).
@@ -752,6 +557,18 @@ impl App {
         }
         self.input_history.push(prompt.clone());
         self.history_index = 0;
+
+        // ── Persist input history (best-effort, before any early return) ──
+        {
+            let session_id = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    self.session.read().await.id.clone()
+                })
+            });
+            if let Err(e) = self.ctx.storage.record_input_history(&session_id, &prompt) {
+                warn!(err = %e, "failed to persist input history");
+            }
+        }
 
         // Check for slash commands.
         if prompt.starts_with('/') {
@@ -812,11 +629,6 @@ impl App {
             elapsed_ms: 0,
         });
 
-        let ctx = self.ctx.clone();
-        let skip_permissions = self.ctx.dangerously_skip_permissions;
-        let tool_def = tools::command_tool_definition();
-        let temperature = self.ctx.storage.config.model.temperature;
-        let max_tokens = self.ctx.storage.config.model.max_output_tokens;
         let thinking_mode = self.thinking_mode;
         let session = self.session.clone();
 
@@ -844,231 +656,19 @@ impl App {
 
         info!("TUI: starting multi-turn tool-calling stream");
 
-        let handle = tokio::spawn(async move {
-            let mut messages = initial_messages;
-            let mut phase = 1;
-
-            loop {
-                let has_tools = phase == 1;
-                let req = ChatRequest {
-                    model: provider.model_name().to_owned(),
-                    messages: messages.clone(),
-                    tools: if has_tools { Some(vec![tool_def.clone()]) } else { None },
-                    tool_choice: if has_tools { Some(serde_json::json!("auto")) } else { None },
-                    temperature: Some(temperature),
-                    max_tokens: Some(max_tokens),
-                    stream: true,
-                    thinking_mode: if thinking_mode { Some("enabled".into()) } else { None },
-                    reasoning_effort: if thinking_mode { Some("max".into()) } else { None },
-                };
-
-                let mut content_buf = String::new();
-                let mut reasoning_buf = String::new();
-                let mut tool_calls: Vec<ToolCall> = Vec::new();
-                let mut last_usage: Option<arcc_core::model::types::Usage> = None;
-
-                match provider.chat_stream(req).await {
-                    Ok(stream) => {
-                        let mut stream = Box::pin(stream);
-                        while let Some(chunk) = stream.next().await {
-                            match chunk {
-                                Ok(StreamChunk::Content(text)) => {
-                                    content_buf.push_str(&text);
-                                    let _ = tx.send(AppEvent::Token(text));
-                                }
-                                Ok(StreamChunk::Reasoning(text)) => {
-                                    reasoning_buf.push_str(&text);
-                                    let _ = tx.send(AppEvent::Reasoning(text));
-                                }
-                                Ok(StreamChunk::ToolCallStart(tc)) => {
-                                    tool_calls.push(tc);
-                                }
-                                Ok(StreamChunk::Finish(usage)) => {
-                                    last_usage = Some(usage);
-                                }
-                                Ok(StreamChunk::ToolCallEnd { .. }) => {}
-                                Err(e) => {
-                                    error!(err = %e, "stream error");
-                                    let _ = tx.send(AppEvent::Token(format!("\n ❌ stream error: {e}")));
-                                    let _ = tx.send(AppEvent::StreamDone);
-                                    return;
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        error!(err = %e, "chat_stream failed");
-                        let _ = tx.send(AppEvent::Token(format!("\n ❌ {e}")));
-                        let _ = tx.send(AppEvent::StreamDone);
-                        return;
-                    }
-                }
-
-                // Record token usage from API response
-                if let Some(ref usage) = last_usage {
-                    let sid = session.read().await.id.clone();
-                    let mdl = provider.model_name().to_owned();
-                    if let Err(e) = ctx.storage.record_token_usage(
-                        &sid,
-                        &mdl,
-                        usage.prompt_tokens as i64,
-                        usage.completion_tokens as i64,
-                    ) {
-                        warn!(err = %e, "failed to record token usage");
-                    }
-                }
-
-                let has_tool_calls = !tool_calls.is_empty();
-
-                // Persist the assistant response (content + reasoning) to session.
-                let content_preview = content_buf.chars().take(120).collect::<String>();
-                debug!(content_buf_len = content_buf.len(), has_tool_calls, preview = %content_preview, "persisting assistant response");
-                {
-                    let mut s = session.write().await;
-                    let assistant_msg = ChatMessage {
-                        role: "assistant".into(),
-                        content: content_buf.clone(),
-                        tool_calls: if has_tool_calls { Some(tool_calls.clone()) } else { None },
-                        tool_call_id: None,
-                        reasoning_content: if reasoning_buf.is_empty() { None } else { Some(reasoning_buf.clone()) },
-                    };
-                    s.push_message(
-                        assistant_msg,
-                        provider.count_tokens(&content_buf) + provider.count_tokens(&reasoning_buf),
-                    );
-                }
-
-                if !has_tool_calls {
-                    let _ = tx.send(AppEvent::StreamDone);
-                    return;
-                }
-
-                // Execute tool calls and persist results.
-                for tc in &tool_calls {
-                    info!(tool = %tc.name, id = %tc.id, "executing tool call");
-                    let command = tc.arguments["command"].as_str().unwrap_or("").to_owned();
-                    let cmd_name = command.split_whitespace().next().unwrap_or(&command).to_string();
-                    let _ = tx.send(AppEvent::ToolExec(format!("{command}...")));
-
-                    // Interactive permission check via generic Prompt.
-                    let mut rejected = false;
-                    if !skip_permissions {
-                        let needs_confirm = ctx.allowlist.read().await.check(&command).unwrap_or(false);
-                        if needs_confirm {
-                            let (resp_tx, resp_rx) = oneshot::channel();
-                            let _ = tx.send(AppEvent::Prompt(PromptRequest {
-                                message: cow_say(&command),
-                                hint: "**[y]** approve · **[a]** allow always · **[n]** reject".into(),
-                                response_tx: resp_tx,
-                            }));
-                            let answer = resp_rx.await.unwrap_or(None);
-                            match answer.as_deref() {
-                                Some("a") | Some("always") => {
-                                    ctx.allowlist.write().await.approve(cmd_name);
-                                }
-                                Some("n") | Some("no") | None => {
-                                    rejected = true;
-                                }
-                                _ => {} // "y" / "yes" → proceed
-                            }
-                        }
-                    }
-
-                    if rejected {
-                        let mut s = session.write().await;
-                        s.push_message(ChatMessage {
-                            role: "tool".into(),
-                            content: "execution rejected by user".into(),
-                            tool_calls: None,
-                            tool_call_id: Some(tc.id.clone()),
-                            reasoning_content: None,
-                        }, 0);
-                        let _ = tx.send(AppEvent::ToolExec("✗ Rejected by user".into()));
-                        continue;
-                    }
-
-                    // Execute (skip_permissions=true because we already checked).
-                    let ai_interactive = tc.arguments.get("interactive")
-                        .and_then(|v| v.as_bool());
-                    let lower = command.to_lowercase();
-                    let words: Vec<&str> = lower.split_whitespace().collect();
-                    let first = words.first().copied().unwrap_or("");
-                    let auto_interactive = first == "sudo"
-                        || words.contains(&"sudo");
-                    let interactive = ai_interactive.unwrap_or(auto_interactive);
-                    let executed = if interactive {
-                        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                        let _ = tx.send(AppEvent::InteractiveCommand {
-                            command: command.clone(),
-                            response_tx: resp_tx,
-                        });
-                        let msg = resp_rx.await.unwrap_or_else(|_| "interactive: cancelled".to_string());
-                        let exit_code = msg.strip_prefix("exit=")
-                            .and_then(|s| s.parse::<i32>().ok());
-                        let content = format!("exit_code: {:?}\nstdout:\n(see terminal output above)\n", exit_code);
-                        Ok(tools::CommandOutput {
-                            stdout: content,
-                            stderr: String::new(),
-                            exit_code,
-                            truncated: false,
-                        })
-                    } else {
-                        let al = ctx.allowlist.read().await;
-                        let r = tools::execute_command(&command, &al, true).await;
-                        drop(al);
-                        r
-                    };
-
-                    match executed {
-                        Ok(output) => {
-                            let content = if output.stderr.is_empty() {
-                                output.stdout
-                            } else {
-                                format!("exit_code: {:?}\nstdout:\n{}\nstderr:\n{}",
-                                    output.exit_code, output.stdout, output.stderr)
-                            };
-                            {
-                                let mut s = session.write().await;
-                                s.push_message(ChatMessage {
-                                    role: "tool".into(),
-                                    content: content.clone(),
-                                    tool_calls: None,
-                                    tool_call_id: Some(tc.id.clone()),
-                                    reasoning_content: None,
-                                }, provider.count_tokens(&content));
-                            }
-                            let _ = tx.send(AppEvent::ToolExec(format!(
-                                "{command} → exit={:?}", output.exit_code)));
-                        }
-                        Err(e) => {
-                            {
-                                let mut s = session.write().await;
-                                s.push_message(ChatMessage {
-                                    role: "tool".into(),
-                                    content: format!("error: {e}"),
-                                    tool_calls: None,
-                                    tool_call_id: Some(tc.id.clone()),
-                                    reasoning_content: None,
-                                }, 0);
-                            }
-                            let _ = tx.send(AppEvent::ToolExec(format!("{command}: {e}")));
-                        }
-                    }
-                }
-
-                // Rebuild messages for phase 2 from session (with thinking-mode sanitization).
-                messages = {
-                    let s = session.read().await;
-                    let mut base = s.prepare_for_request(thinking_mode);
-                    base.retain(|m| m.role != "system");
-                    std::iter::once(system_msg.clone())
-                        .chain(base)
-                        .collect()
-                };
-                phase = 2;
-            }
-        });
-        self.task_handle = Some(handle);
+        let config = ToolCallLoopConfig {
+            system_content: system_msg.content.clone(),
+            request_thinking: thinking_mode,
+            thinking_mode,
+        };
+        self.task_handle = Some(tokio::spawn(run_tool_calling_loop(
+            provider,
+            self.session.clone(),
+            self.ctx.clone(),
+            config,
+            initial_messages,
+            tx,
+        )));
     }
 
     /// Handle a slash command directly (no LLM).
@@ -1212,7 +812,21 @@ impl App {
             "dashboard" | "data" => {
                 self.show_dashboard = !self.show_dashboard;
                 if self.show_dashboard {
-                    self.dashboard = Some(collect_dashboard_data(&self.ctx));
+                    // Use cached data if still within TTL.
+                    let data = match &self.dashboard_cache {
+                        Some(cache) if cache.collected_at.elapsed() < DASHBOARD_CACHE_TTL => {
+                            cache.data.clone()
+                        }
+                        _ => {
+                            let data = collect_dashboard_data(&self.ctx);
+                            self.dashboard_cache = Some(DashboardCache {
+                                data: data.clone(),
+                                collected_at: Instant::now(),
+                            });
+                            data
+                        }
+                    };
+                    self.dashboard = Some(data);
                     self.dashboard_scroll = 0;
                     self.dashboard_cursor = 0;
                     info!("dashboard opened");
@@ -1236,8 +850,8 @@ impl App {
                 if path.exists() {
                     let (resp_tx, resp_rx) = oneshot::channel();
                     let _ = self.event_tx.send(AppEvent::Prompt(PromptRequest {
-                        message: cow_say("Overwrite ARCC.md?"),
-                        hint: "**[y]** yes · **[n]** no".into(),
+                        message: cow_say("Overwrite ARCC.md?", "[y] yes · [n] no"),
+                        hint: String::new(),
                         response_tx: resp_tx,
                     }));
                     // Spawn a task to await the response.
@@ -1305,7 +919,7 @@ fn collect_dashboard_data(ctx: &arcc_core::context::SharedContext) -> components
         .map(|n| n.get())
         .unwrap_or(0);
     let uptime = get_uptime();
-    let (mem_total, mem_used) = get_memory_info();
+    let mem = arcc_core::system::memory_info();
 
     let total_tokens = ctx.storage.total_tokens(7).unwrap_or((0, 0));
     let (total_input, total_output) = total_tokens;
@@ -1368,8 +982,8 @@ fn collect_dashboard_data(ctx: &arcc_core::context::SharedContext) -> components
             cpu_count,
             uptime: uptime.unwrap_or_else(|| "?".into()),
             version: env!("CARGO_PKG_VERSION").to_owned(),
-            memory_total_mb: mem_total,
-            memory_used_mb: mem_used,
+            memory_total_mb: mem.total_mb(),
+            memory_used_mb: mem.used_mb(),
         },
         sessions: session_rows,
         session_ids,
@@ -1427,58 +1041,6 @@ fn get_uptime() -> Option<String> {
     }
 }
 
-/// Get memory info: (total_mb, used_mb). Returns (0,0) on failure.
-fn get_memory_info() -> (u64, u64) {
-    if cfg!(target_os = "macos") {
-        let total = std::process::Command::new("sysctl")
-            .args(["-n", "hw.memsize"])
-            .output()
-            .ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .and_then(|s| s.trim().parse::<u64>().ok());
-
-        let vm = std::process::Command::new("vm_stat")
-            .output()
-            .ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok());
-
-        if let (Some(total_bytes), Some(ref vm_out)) = (total, vm) {
-            let page_size = vm_out
-                .lines()
-                .next()
-                .and_then(|l| l.split("page size of ").nth(1))
-                .and_then(|s| s.split(" bytes").next())
-                .and_then(|s| s.trim().parse::<u64>().ok())
-                .unwrap_or(16384);
-
-            let active = parse_vm_val(vm_out, "Pages active:");
-            let wired = parse_vm_val(vm_out, "Pages wired down:");
-            let compressed = parse_vm_val(vm_out, "Pages occupied by compressor:");
-
-            let used_bytes = (active + wired + compressed) * page_size;
-            return (total_bytes / 1_048_576, used_bytes / 1_048_576);
-        }
-    } else if cfg!(target_os = "linux")
-        && let Ok(content) = std::fs::read_to_string("/proc/meminfo")
-    {
-        let total_kb = parse_proc_val(&content, "MemTotal:");
-        let avail_kb = parse_proc_val(&content, "MemAvailable:");
-        if let (Some(t), Some(a)) = (total_kb, avail_kb) {
-            return (t / 1024, (t - a) / 1024);
-        }
-    }
-    (0, 0)
-}
-
-fn parse_vm_val(output: &str, key: &str) -> u64 {
-    output
-        .lines()
-        .find(|l| l.contains(key))
-        .and_then(|l| l.split(':').nth(1))
-        .and_then(|s| s.trim().trim_end_matches('.').parse::<u64>().ok())
-        .unwrap_or(0)
-}
-
 /// Parse an RFC 3339 or SQLite timestamp and format as local `YYYY-MM-DD HH:MM:SS`.
 fn fmt_local_ts(ts: &str) -> String {
     // RFC 3339 with timezone (e.g. "2026-06-11T01:26:37.630464Z")
@@ -1493,14 +1055,6 @@ fn fmt_local_ts(ts: &str) -> String {
     }
     // Fallback: return as-is (strip T if present)
     ts.replace('T', " ")
-}
-
-fn parse_proc_val(content: &str, key: &str) -> Option<u64> {
-    content
-        .lines()
-        .find(|l| l.starts_with(key))
-        .and_then(|l| l.split_whitespace().nth(1))
-        .and_then(|s| s.parse::<u64>().ok())
 }
 
 // ── Live system monitor ─────────────────────────────────────────────
@@ -1535,7 +1089,7 @@ fn start_monitor(
             let (cpu_pct, mem_pct, rx_bytes, tx_bytes) =
                 tokio::task::spawn_blocking(move || {
                     let c = get_live_cpu(core_count);
-                    let m = get_live_mem();
+                    let m = arcc_core::system::memory_info().usage_pct();
                     let (rx, tx) = get_live_net();
                     (c, m, rx, tx)
                 })
@@ -1600,44 +1154,6 @@ fn get_live_cpu(core_count: usize) -> f64 {
     0.0
 }
 
-/// Get memory usage as a percentage (0.0 – 100.0).
-fn get_live_mem() -> f64 {
-    if cfg!(target_os = "macos") {
-        let total = std::process::Command::new("sysctl")
-            .args(["-n", "hw.memsize"])
-            .output()
-            .ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .and_then(|s| s.trim().parse::<u64>().ok());
-        let vm = std::process::Command::new("vm_stat")
-            .output()
-            .ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok());
-        if let (Some(t), Some(ref v)) = (total, vm) {
-            let page_size = v
-                .lines().next()
-                .and_then(|l| l.split("page size of ").nth(1))
-                .and_then(|s| s.split(" bytes").next())
-                .and_then(|s| s.trim().parse::<u64>().ok())
-                .unwrap_or(16384);
-            let active = parse_vm_val(v, "Pages active:");
-            let wired = parse_vm_val(v, "Pages wired down:");
-            let compressed = parse_vm_val(v, "Pages occupied by compressor:");
-            let used = (active + wired + compressed) * page_size;
-            return (used as f64 / t as f64 * 100.0).clamp(0.0, 100.0);
-        }
-    } else if cfg!(target_os = "linux")
-        && let Ok(content) = std::fs::read_to_string("/proc/meminfo")
-    {
-        let total_kb = parse_proc_val(&content, "MemTotal:");
-        let avail_kb = parse_proc_val(&content, "MemAvailable:");
-        if let (Some(t), Some(a)) = (total_kb, avail_kb) {
-            return (t - a) as f64 / t as f64 * 100.0;
-        }
-    }
-    0.0
-}
-
 /// Get cumulative network bytes (rx, tx) for the first active non-lo interface.
 /// Finds column positions dynamically from the `netstat -ib` header line.
 fn get_live_net() -> (u64, u64) {
@@ -1679,14 +1195,282 @@ fn get_live_net() -> (u64, u64) {
 }
 
 // ---------------------------------------------------------------------------
+// Shared tool-calling loop — extracted from plan_submit / submit
+// ---------------------------------------------------------------------------
+
+/// Parameters that differentiate `plan_submit` from `submit` in the shared loop.
+#[derive(Clone)]
+struct ToolCallLoopConfig {
+    /// System message content used for phase-2 message reconstruction.
+    system_content: String,
+    /// Whether to request thinking mode in the ChatRequest.
+    request_thinking: bool,
+    /// Whether to pass `thinking_mode=true` to `prepare_for_request`.
+    thinking_mode: bool,
+}
+
+/// Multi-turn tool-calling stream loop shared by `plan_submit` and `submit`.
+///
+/// Handles:
+/// 1. Stream consumption (Content / Reasoning / ToolCallStart / Finish)
+/// 2. Token usage recording
+/// 3. Assistant message persistence to session
+/// 4. Permission-checking + tool execution + result persistence
+/// 5. Phase-2 message reconstruction
+async fn run_tool_calling_loop(
+    provider: Arc<dyn ModelProvider>,
+    session: Arc<RwLock<Session>>,
+    ctx: SharedContext,
+    config: ToolCallLoopConfig,
+    initial_messages: Vec<ChatMessage>,
+    tx: mpsc::UnboundedSender<AppEvent>,
+) {
+    let tool_def = tools::command_tool_definition();
+    let temperature = ctx.storage.config.model.temperature;
+    let max_tokens = ctx.storage.config.model.max_output_tokens;
+    let skip_permissions = ctx.dangerously_skip_permissions;
+
+    let mut messages = initial_messages;
+    let mut phase = 1;
+
+    loop {
+        let has_tools = phase == 1;
+        let req = ChatRequest {
+            model: provider.model_name().to_owned(),
+            messages: messages.clone(),
+            tools: if has_tools { Some(vec![tool_def.clone()]) } else { None },
+            tool_choice: if has_tools { Some(serde_json::json!("auto")) } else { None },
+            temperature: Some(temperature),
+            max_tokens: Some(max_tokens),
+            stream: true,
+            thinking_mode: if config.request_thinking { Some("enabled".into()) } else { None },
+            reasoning_effort: if config.request_thinking { Some("max".into()) } else { None },
+        };
+
+        let mut content_buf = String::new();
+        let mut reasoning_buf = String::new();
+        let mut tool_calls: Vec<ToolCall> = Vec::new();
+        let mut last_usage: Option<arcc_core::model::types::Usage> = None;
+
+        match provider.chat_stream(req).await {
+            Ok(stream) => {
+                let mut stream = Box::pin(stream);
+                while let Some(chunk) = stream.next().await {
+                    match chunk {
+                        Ok(StreamChunk::Content(text)) => {
+                            content_buf.push_str(&text);
+                            let _ = tx.send(AppEvent::Token(text));
+                        }
+                        Ok(StreamChunk::Reasoning(text)) => {
+                            reasoning_buf.push_str(&text);
+                            let _ = tx.send(AppEvent::Reasoning(text));
+                        }
+                        Ok(StreamChunk::ToolCallStart(tc)) => {
+                            tool_calls.push(tc);
+                        }
+                        Ok(StreamChunk::Finish(usage)) => {
+                            last_usage = Some(usage);
+                        }
+                        Ok(StreamChunk::ToolCallEnd { .. }) => {}
+                        Err(e) => {
+                            error!(err = %e, "stream error");
+                            let _ = tx.send(AppEvent::Token(format!("\n ❌ stream error: {e}")));
+                            let _ = tx.send(AppEvent::StreamDone);
+                            return;
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                error!(err = %e, "chat_stream failed");
+                let _ = tx.send(AppEvent::Token(format!("\n ❌ {e}")));
+                let _ = tx.send(AppEvent::StreamDone);
+                return;
+            }
+        }
+
+        // Record token usage from API response.
+        if let Some(ref usage) = last_usage {
+            let sid = session.read().await.id.clone();
+            let mdl = provider.model_name().to_owned();
+            if let Err(e) = ctx.storage.record_token_usage(
+                &sid,
+                &mdl,
+                usage.prompt_tokens as i64,
+                usage.completion_tokens as i64,
+            ) {
+                warn!(err = %e, "failed to record token usage");
+            }
+        }
+
+        let has_tool_calls = !tool_calls.is_empty();
+
+        // Persist the assistant response (content + reasoning) to session.
+        let content_preview = content_buf.chars().take(120).collect::<String>();
+        debug!(content_buf_len = content_buf.len(), has_tool_calls, preview = %content_preview, "persisting assistant response");
+        {
+            let mut s = session.write().await;
+            let assistant_msg = ChatMessage {
+                role: "assistant".into(),
+                content: content_buf.clone(),
+                tool_calls: if has_tool_calls { Some(tool_calls.clone()) } else { None },
+                tool_call_id: None,
+                reasoning_content: if reasoning_buf.is_empty() { None } else { Some(reasoning_buf.clone()) },
+            };
+            s.push_message(
+                assistant_msg,
+                provider.count_tokens(&content_buf) + provider.count_tokens(&reasoning_buf),
+            );
+        }
+
+        if !has_tool_calls {
+            let _ = tx.send(AppEvent::StreamDone);
+            return;
+        }
+
+        // Execute tool calls.
+        for tc in &tool_calls {
+            info!(tool = %tc.name, id = %tc.id, "executing tool call");
+            let command = tc.arguments["command"].as_str().unwrap_or("").to_owned();
+            let cmd_name = command.split_whitespace().next().unwrap_or(&command).to_string();
+            let _ = tx.send(AppEvent::ToolExec(format!("{command}...")));
+
+            // Interactive permission check via generic Prompt.
+            let mut rejected = false;
+            if !skip_permissions {
+                let needs_confirm = ctx.allowlist.read().await.check(&command).unwrap_or(false);
+                if needs_confirm {
+                    let (resp_tx, resp_rx) = oneshot::channel();
+                    let _ = tx.send(AppEvent::Prompt(PromptRequest {
+                        message: cow_say(&command, "[y] approve · [a] allow always · [n] reject"),
+                        hint: "**[y]** approve · **[a]** allow always · **[n]** reject".into(),
+                        response_tx: resp_tx,
+                    }));
+                    let answer = resp_rx.await.unwrap_or(None);
+                    match answer.as_deref() {
+                        Some("a") | Some("always") => {
+                            ctx.allowlist.write().await.approve(cmd_name);
+                        }
+                        Some("n") | Some("no") | None => {
+                            rejected = true;
+                        }
+                        _ => {} // "y" / "yes" → proceed
+                    }
+                }
+            }
+
+            if rejected {
+                let mut s = session.write().await;
+                s.push_message(ChatMessage {
+                    role: "tool".into(),
+                    content: "execution rejected by user".into(),
+                    tool_calls: None,
+                    tool_call_id: Some(tc.id.clone()),
+                    reasoning_content: None,
+                }, 0);
+                let _ = tx.send(AppEvent::ToolExec("✗ Rejected by user".into()));
+                continue;
+            }
+
+            // Execute (skip_permissions=true because we already checked).
+            let ai_interactive = tc.arguments.get("interactive")
+                .and_then(|v| v.as_bool());
+            let lower = command.to_lowercase();
+            let words: Vec<&str> = lower.split_whitespace().collect();
+            let first = words.first().copied().unwrap_or("");
+            let auto_interactive = first == "sudo"
+                || words.contains(&"sudo");
+            let interactive = ai_interactive.unwrap_or(auto_interactive);
+            let executed = if interactive {
+                let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                let _ = tx.send(AppEvent::InteractiveCommand {
+                    command: command.clone(),
+                    response_tx: resp_tx,
+                });
+                let msg = resp_rx.await.unwrap_or_else(|_| "interactive: cancelled".to_string());
+                let exit_code = msg.strip_prefix("exit=")
+                    .and_then(|s| s.parse::<i32>().ok());
+                let content = format!("exit_code: {:?}\nstdout:\n(see terminal output above)\n", exit_code);
+                Ok(tools::CommandOutput {
+                    stdout: content,
+                    stderr: String::new(),
+                    exit_code,
+                    truncated: false,
+                })
+            } else {
+                let al = ctx.allowlist.read().await;
+                let r = tools::execute_command(&command, &al, true).await;
+                drop(al);
+                r
+            };
+
+            match executed {
+                Ok(output) => {
+                    let content = if output.stderr.is_empty() {
+                        output.stdout
+                    } else {
+                        format!("exit_code: {:?}\nstdout:\n{}\nstderr:\n{}",
+                            output.exit_code, output.stdout, output.stderr)
+                    };
+                    let tokens = provider.count_tokens(&content);
+                    let mut s = session.write().await;
+                    s.push_message(ChatMessage {
+                        role: "tool".into(),
+                        content,
+                        tool_calls: None,
+                        tool_call_id: Some(tc.id.clone()),
+                        reasoning_content: None,
+                    }, tokens);
+                    let _ = tx.send(AppEvent::ToolExec(format!(
+                        "{command} → exit={:?}", output.exit_code)));
+                }
+                Err(e) => {
+                    let mut s = session.write().await;
+                    s.push_message(ChatMessage {
+                        role: "tool".into(),
+                        content: format!("error: {e}"),
+                        tool_calls: None,
+                        tool_call_id: Some(tc.id.clone()),
+                        reasoning_content: None,
+                    }, 0);
+                    let _ = tx.send(AppEvent::ToolExec(format!("{command}: {e}")));
+                }
+            }
+        }
+
+        // Rebuild messages for phase 2 from session.
+        messages = {
+            let s = session.read().await;
+            let mut base = s.prepare_for_request(config.thinking_mode);
+            base.retain(|m| m.role != "system");
+            std::iter::once(ChatMessage {
+                role: "system".into(),
+                content: config.system_content.clone(),
+                tool_calls: None,
+                tool_call_id: None,
+                reasoning_content: None,
+            })
+            .chain(base)
+            .collect()
+        };
+        phase = 2;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Cow prompt helper — reusable ASCII art for confirmation dialogs
 // ---------------------------------------------------------------------------
 
-fn cow_say(title: &str) -> String {
+fn cow_say(title: &str, hint: &str) -> String {
     let sep = "‑".repeat(title.chars().count() + 2).replace('‑', "-");
-    format!(
-        "```\n< {title} >\n{sep}\n  \\   ^__^\n   \\  (oo)\\_______\n      (__)\\       )\\/\\\n          ||----w |\n          ||     ||\n```"
-    )
+    let cow = format!(
+        "< {title} >\n{sep}\n  \\   ^__^\n   \\  (oo)\\_______\n      (__)\\       )\\/\\\n          ||----w |\n          ||     ||"
+    );
+    if hint.is_empty() {
+        format!("```\n{cow}\n```")
+    } else {
+        format!("```\n{cow}\n{hint}\n```")
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1844,6 +1628,7 @@ pub async fn run(ctx: SharedContext) -> anyhow::Result<()> {
     enable_raw_mode()?;
     execute!(stdout, EnterAlternateScreen)?;
     execute!(stdout, EnableBracketedPaste)?;
+    execute!(stdout, EnableMouseCapture)?;
     let mut terminal = Terminal::new(ratatui::backend::CrosstermBackend::new(stdout))?;
 
     let (tx, rx) = crate::event::loop_event::create_event_loop();
@@ -1903,30 +1688,19 @@ pub async fn run(ctx: SharedContext) -> anyhow::Result<()> {
                                     app.messages
                                         .push(format!("🤖 **Session `{short_id}` — last {} messages**", msgs.len()));
                                     for m in msgs.iter().rev() {
-                                        let role_emoji = match m.role.as_str() {
-                                            "user" => "🧑",
-                                            "assistant" => "🤖",
-                                            "tool" => "⚡",
-                                            _ => "📝",
+                                        let (role_emoji, _role_label) = match m.role.as_str() {
+                                            "user" => ("🧑 ", "user"),
+                                            "assistant" => ("🤖 ", "assistant"),
+                                            "tool" => ("⚡ ", "tool"),
+                                            _ => ("📝 ", "?"),
                                         };
-                                        let raw_preview: String = m.content.chars().take(160).collect();
-                                        let ellipsis = if raw_preview.len() < m.content.len() {
-                                            "…"
-                                        } else {
-                                            ""
-                                        };
-                                        let one_line = raw_preview
-                                            .replace('\n', " ")
-                                            .replace('\r', "");
+                                        app.messages.push(format!("{role_emoji}{}", &m.content));
+                                        let ts = m.created_at.as_deref().unwrap_or("?");
                                         let tokens = m
                                             .token_count
-                                            .map(|t| format!(" ({} tok)", t))
+                                            .map(|t| format!(" ({t} tok)"))
                                             .unwrap_or_default();
-                                        let ts = m.created_at.as_deref().unwrap_or("?");
-                                        app.messages.push(format!(
-                                            "{} {} · {}{}{}",
-                                            role_emoji, one_line, ts, tokens, ellipsis,
-                                        ));
+                                        app.messages.push(format!("  _· {ts}{tokens}_"));
                                     }
                                     app.messages
                                         .push("🤖 Press Esc to return to dashboard".into());
@@ -1937,9 +1711,11 @@ pub async fn run(ctx: SharedContext) -> anyhow::Result<()> {
                                 app.character_index = 0;
                             }
                         }
-                    } else {
+                    } else if app.status == components::status::IDLE {
                         app.submit(tx.clone());
                     }
+                    // Non-IDLE: Enter silently ignored — user can type their
+                    // next message while AI responds, and submit when finished.
                 }
                 AppEvent::InteractiveCommand { command, response_tx } => {
                     // Pause the crossterm input handler so it doesn't compete
@@ -1949,11 +1725,11 @@ pub async fn run(ctx: SharedContext) -> anyhow::Result<()> {
 
                     // Exit alternate screen + raw mode → child output goes to
                     // the primary screen, cleanly separated from the TUI.
+                    execute!(terminal.backend_mut(), DisableMouseCapture)?;
                     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
                     disable_raw_mode()?;
 
-                    let shell = if cfg!(target_os = "windows") { "cmd.exe" } else { "sh" };
-                    let arg = if cfg!(target_os = "windows") { "/C" } else { "-c" };
+                    let (shell, arg) = arcc_core::system::shell_and_arg();
                     let exit_code = std::process::Command::new(shell)
                         .arg(arg)
                         .arg(&command)
@@ -1968,6 +1744,7 @@ pub async fn run(ctx: SharedContext) -> anyhow::Result<()> {
                     // Re-enter TUI mode.
                     enable_raw_mode()?;
                     execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+                    execute!(terminal.backend_mut(), EnableMouseCapture)?;
                     terminal.clear()?;
 
                     // Re-spawn the input handler now that the child is done.
@@ -2032,7 +1809,7 @@ pub async fn run(ctx: SharedContext) -> anyhow::Result<()> {
 );
             }
             components::render_divider(f, areas[3]);
-            components::render_input(f, areas[4], &app.input_buffer);
+            components::render_input(f, areas[4], &app.input_buffer, &app.status);
             components::render_divider(f, areas[5]);
 
             // Calculate visual cursor position using Unicode width (Chinese chars = 2 columns).
@@ -2043,10 +1820,17 @@ pub async fn run(ctx: SharedContext) -> anyhow::Result<()> {
             f.set_cursor_position(Position::new(cursor_x, areas[4].y));
         })?;
 
+        // Prune oldest messages if the buffer exceeds the cap.
+        if app.messages.len() > MAX_STORED_MSGS {
+            let excess = app.messages.len() - MAX_STORED_MSGS;
+            let _ = app.messages.drain(..excess);
+        }
+
         app.tick = app.tick.wrapping_add(1);
         tokio::time::sleep(std::time::Duration::from_millis(16)).await;
     }
 
+    execute!(terminal.backend_mut(), DisableMouseCapture)?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     execute!(terminal.backend_mut(), DisableBracketedPaste)?;
     disable_raw_mode()?;

@@ -476,11 +476,11 @@ mod tests {
         let block = dsml_block(&invoke("f", &param("x", "1", false)));
         let (a, b) = block.split_at(block.len() / 2);
 
-        let (emit1, tcs1) = acc.ingest(a);
+        let (_emit1, tcs1) = acc.ingest(a);
         // First chunk: DSML started but not finished → no tool calls yet
         assert!(tcs1.is_empty());
 
-        let (emit2, tcs2) = acc.ingest(b);
+        let (_emit2, tcs2) = acc.ingest(b);
         // Second chunk: DSML completed → tool calls emitted
         assert_eq!(tcs2.len(), 1);
         assert_eq!(tcs2[0].name, "f");
@@ -490,7 +490,7 @@ mod tests {
     fn accumulator_incomplete_dsml_flushed_as_text() {
         let mut acc = DsmlAccumulator::default();
         let incomplete = format!("{TAG_TOOL_CALLS_OPEN}{}", "<\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C}invoke name=\"x\">");
-        let (emit, tcs) = acc.ingest(&incomplete);
+        let (_emit, tcs) = acc.ingest(&incomplete);
         assert!(tcs.is_empty());
         // Flush should return the incomplete DSML as text.
         let flush = acc.flush();

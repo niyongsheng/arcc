@@ -8,7 +8,7 @@ use tracing::info;
 
 use crate::audit::types::AuditEvent;
 use crate::db::queries;
-use crate::db::models::{Message, Session, Summary};
+use crate::db::models::{InputHistoryEntry, Message, Session, Summary};
 
 /// Top-level initialisation: loads config, opens DB, runs migrations.
 ///
@@ -112,6 +112,32 @@ impl ArccStorage {
     /// Read the most recent N audit events.
     pub fn recent_audit(&self, count: usize) -> Result<Vec<AuditEvent>, StorageError> {
         Ok(audit::reader::read_recent(&self.audit_path, count)?)
+    }
+
+    /// Update the summary text stored directly on a session row.
+    pub fn update_session_summary(
+        &self,
+        session_id: &str,
+        summary: &str,
+    ) -> Result<(), StorageError> {
+        let conn = self.db.lock().expect("db mutex poisoned");
+        Ok(queries::update_session_summary(&conn, session_id, summary)?)
+    }
+
+    /// Record a user prompt in the input history.
+    pub fn record_input_history(
+        &self,
+        session_id: &str,
+        prompt: &str,
+    ) -> Result<(), StorageError> {
+        let conn = self.db.lock().expect("db mutex poisoned");
+        Ok(queries::insert_input_history(&conn, session_id, prompt)?)
+    }
+
+    /// List the most recent N input history entries.
+    pub fn recent_input_history(&self, limit: usize) -> Result<Vec<InputHistoryEntry>, StorageError> {
+        let conn = self.db.lock().expect("db mutex poisoned");
+        Ok(queries::list_input_history(&conn, limit)?)
     }
 
     /// Shortcut: init from the default home (`~/.arcc/`).

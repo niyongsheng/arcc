@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
@@ -58,6 +58,31 @@ impl Session {
                     rusqlite::params![self.id, self.name, self.mode],
                 ) {
                     warn!(err = %e, session = %self.id, "failed to persist session");
+                }
+            }
+            Err(e) => {
+                warn!(err = %e, "db lock poisoned");
+            }
+        }
+    }
+
+    /// Persist the current summary to the `sessions` table (best-effort).
+    fn persist_summary(&self) {
+        let db = match self.db {
+            Some(ref db) => db,
+            None => return,
+        };
+        let summary = match self.summary {
+            Some(ref s) => s,
+            None => return,
+        };
+        match db.lock() {
+            Ok(conn) => {
+                if let Err(e) = conn.execute(
+                    "UPDATE sessions SET summary = ?2 WHERE id = ?1",
+                    rusqlite::params![self.id, summary],
+                ) {
+                    warn!(err = %e, session = %self.id, "failed to persist summary");
                 }
             }
             Err(e) => {
@@ -187,6 +212,7 @@ impl Session {
                     reasoning_content: None,
                 });
                 self.summary = Some(summary_text);
+                self.persist_summary();
                 self.token_count = flash_provider.count_tokens(
                     &self.messages[0].content
                 );
@@ -282,7 +308,7 @@ impl Session {
 
 /// Manages all active sessions, keyed by session ID.
 pub struct SessionManager {
-    sessions: RwLock<Vec<Arc<RwLock<Session>>>>,
+    sessions: RwLock<HashMap<String, Arc<RwLock<Session>>>>,
     context_max_tokens: usize,
     db: Option<Arc<Mutex<rusqlite::Connection>>>,
 }
@@ -290,7 +316,7 @@ pub struct SessionManager {
 impl SessionManager {
     pub fn new(context_max_tokens: usize) -> Self {
         Self {
-            sessions: RwLock::new(Vec::new()),
+            sessions: RwLock::new(HashMap::new()),
             context_max_tokens,
             db: None,
         }
@@ -299,7 +325,7 @@ impl SessionManager {
     /// Create a `SessionManager` with a shared database connection for persistence.
     pub fn with_db(context_max_tokens: usize, db: Arc<Mutex<rusqlite::Connection>>) -> Self {
         Self {
-            sessions: RwLock::new(Vec::new()),
+            sessions: RwLock::new(HashMap::new()),
             context_max_tokens,
             db: Some(db),
         }
@@ -320,30 +346,19 @@ impl SessionManager {
             self.context_max_tokens,
             self.db.clone(),
         )));
-        self.sessions.write().await.push(Arc::clone(&session));
+        self.sessions.write().await.insert(id.clone(), Arc::clone(&session));
         info!(%id, name, mode, "session created");
         session
     }
 
-    /// Find a session by ID.
+    /// Find a session by ID — O(1) lookup.
     pub async fn find(&self, id: &str) -> Option<Arc<RwLock<Session>>> {
-        self.sessions
-            .read()
-            .await
-            .iter()
-            .find(|s| {
-                // Need to block_on read — but this is fine for a quick check.
-                // For production, sessions should be in a HashMap.
-                s.try_read().map(|s| s.id == id).unwrap_or(false)
-            })
-            .cloned()
+        self.sessions.read().await.get(id).cloned()
     }
 
     /// Remove a session by ID.
     pub async fn remove(&self, id: &str) {
-        self.sessions.write().await.retain(|s| {
-            s.try_read().map(|s| s.id != id).unwrap_or(true)
-        });
+        self.sessions.write().await.remove(id);
         info!(%id, "session removed");
     }
 
@@ -354,8 +369,12 @@ impl SessionManager {
 
     /// Check all sessions and compress any that exceed the token limit.
     pub async fn compress_all(&self, flash_provider: &dyn ModelProvider) {
-        let sessions = self.sessions.read().await;
-        for s in sessions.iter() {
+        // Clone Arcs under the read lock so we don't hold it during async calls.
+        let sessions: Vec<_> = {
+            let map = self.sessions.read().await;
+            map.values().cloned().collect()
+        };
+        for s in &sessions {
             let mut session = s.write().await;
             if session.needs_compression() {
                 debug!(session = %session.id, tokens = session.token_count(), "compressing session");

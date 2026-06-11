@@ -5,7 +5,7 @@
 
 use rusqlite::{params, Connection, Result};
 
-use super::models::{Message, Session, Summary};
+use super::models::{InputHistoryEntry, Message, Session, Summary};
 
 /// Row returned by `token_usage_daily`.
 #[derive(Debug, Clone)]
@@ -19,7 +19,7 @@ pub struct TokenUsageRow {
 /// List the most recent sessions, ordered by `last_active_at DESC`.
 pub fn list_sessions(conn: &Connection, limit: usize) -> Result<Vec<Session>> {
     let mut stmt = conn.prepare(
-        "SELECT id, name, mode, created_at, last_active_at
+        "SELECT id, name, mode, created_at, last_active_at, summary
          FROM sessions
          ORDER BY last_active_at DESC
          LIMIT ?1",
@@ -31,6 +31,7 @@ pub fn list_sessions(conn: &Connection, limit: usize) -> Result<Vec<Session>> {
             mode: row.get(2)?,
             created_at: row.get(3)?,
             last_active_at: row.get(4)?,
+            summary: row.get(5)?,
         })
     })?;
     rows.collect()
@@ -153,4 +154,50 @@ pub fn upsert_token_usage(
         params![session_id, model, input_tokens, output_tokens],
     )?;
     Ok(())
+}
+
+/// Update the summary text stored directly on the sessions row.
+pub fn update_session_summary(
+    conn: &Connection,
+    session_id: &str,
+    summary: &str,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE sessions SET summary = ?2 WHERE id = ?1",
+        params![session_id, summary],
+    )?;
+    Ok(())
+}
+
+/// Insert a user prompt into the input history table.
+pub fn insert_input_history(
+    conn: &Connection,
+    session_id: &str,
+    prompt: &str,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO input_history (session_id, prompt, created_at)
+         VALUES (?1, ?2, datetime('now'))",
+        params![session_id, prompt],
+    )?;
+    Ok(())
+}
+
+/// List the most recent N input history entries, newest first.
+pub fn list_input_history(conn: &Connection, limit: usize) -> Result<Vec<InputHistoryEntry>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, session_id, prompt, created_at
+         FROM input_history
+         ORDER BY id DESC
+         LIMIT ?1",
+    )?;
+    let rows = stmt.query_map(params![limit as i64], |row| {
+        Ok(InputHistoryEntry {
+            id: row.get(0)?,
+            session_id: row.get(1)?,
+            prompt: row.get(2)?,
+            created_at: row.get(3)?,
+        })
+    })?;
+    rows.collect()
 }

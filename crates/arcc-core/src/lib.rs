@@ -3,6 +3,7 @@ pub mod mcp;
 pub mod model;
 pub mod safety;
 pub mod session;
+pub mod system;
 pub mod tools;
 
 #[derive(Debug, thiserror::Error)]

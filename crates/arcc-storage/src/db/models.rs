@@ -7,6 +7,15 @@ pub struct Session {
     pub mode: String,
     pub created_at: String,
     pub last_active_at: String,
+    pub summary: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InputHistoryEntry {
+    pub id: i64,
+    pub session_id: String,
+    pub prompt: String,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

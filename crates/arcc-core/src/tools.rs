@@ -88,12 +88,7 @@ pub async fn execute_command(
     }
 
     // --- execute ---
-    let shell = if cfg!(target_os = "windows") {
-        "cmd.exe"
-    } else {
-        "sh"
-    };
-    let arg = if cfg!(target_os = "windows") { "/C" } else { "-c" };
+    let (shell, arg) = crate::system::shell_and_arg();
 
     let child = tokio::process::Command::new(shell)
         .arg(arg)
