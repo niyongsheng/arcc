@@ -84,6 +84,20 @@ pub struct LiveMetrics {
     pub tx_rate: f64,
 }
 
+// ── Status constants ─────────────────────────────────────────────────
+
+pub mod status {
+    pub const IDLE: &str = "idle";
+    pub const THINKING: &str = "thinking";
+    pub const STREAMING: &str = "streaming";
+    pub const EXECUTING: &str = "executing";
+    pub const COMPRESSING: &str = "compressing...";
+    pub const WAITING: &str = "waiting...";
+    pub const LOADING: &str = "loading";
+    pub const PLANNING: &str = "planning";
+    pub const ERROR: &str = "error";
+}
+
 // Warm-tone palette (aligned with logo #FF5722)
 const CLR_USER: Color = Color::White;
 const CLR_TOOL: Color = Color::Rgb(140, 140, 140);
@@ -276,11 +290,11 @@ pub fn render_chat(
 /// Pick an animation frame character for the current status and tick.
 fn spinner_char(status: &str, tick: u64) -> char {
     let frames: &[char] = match status {
-        "thinking" | "loading" | "planning" => FluxFrames::CLASSIC,
-        "streaming" => FluxFrames::BOUNCE,
-        "executing" | "generating ARCC.md..." => FluxFrames::LINE,
-        "compressing" | "compressing..." => FluxFrames::ORBIT,
-        "waiting" | "waiting..." => FluxFrames::DIAMOND,
+        status::THINKING | status::LOADING | status::PLANNING => FluxFrames::CLASSIC,
+        status::STREAMING => FluxFrames::BOUNCE,
+        status::EXECUTING => FluxFrames::LINE,
+        status::COMPRESSING => FluxFrames::ORBIT,
+        status::WAITING => FluxFrames::DIAMOND,
         _ => return ' ',
     };
     frames[(tick / 3) as usize % frames.len()]
@@ -289,11 +303,11 @@ fn spinner_char(status: &str, tick: u64) -> char {
 /// Pick the colour for a given status.
 fn status_color(status: &str) -> Color {
     match status {
-        "idle" | "connected" => CLR_STATUS_IDLE,
-        "thinking" | "loading" | "planning" => CLR_STATUS_BUSY,
-        "streaming" | "executing" | "generating ARCC.md..." | "compressing" | "compressing..." => CLR_STATUS_STREAM,
-        "waiting" | "waiting..." => CLR_STATUS_BUSY,
-        "error" => CLR_STATUS_ERR,
+        status::IDLE => CLR_STATUS_IDLE,
+        status::THINKING | status::LOADING | status::PLANNING => CLR_STATUS_BUSY,
+        status::STREAMING | status::EXECUTING | status::COMPRESSING => CLR_STATUS_STREAM,
+        status::WAITING => CLR_STATUS_BUSY,
+        status::ERROR => CLR_STATUS_ERR,
         _ => CLR_TOOL,
     }
 }

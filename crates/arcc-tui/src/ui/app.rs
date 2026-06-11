@@ -159,17 +159,17 @@ impl App {
         match event {
             AppEvent::Input(ch) if ch == "\n" || ch == "\r" => {}
             AppEvent::Input(ch) if ch == "\x08" || ch == "\x7f" => {
-                if self.status == "idle" {
+                if self.status == components::status::IDLE {
                     self.delete_char();
                 }
             }
             AppEvent::Input(ch) if ch == "\x1b[D" => {
-                if self.status == "idle" {
+                if self.status == components::status::IDLE {
                     self.character_index = self.character_index.saturating_sub(1);
                 }
             }
             AppEvent::Input(ch) if ch == "\x1b[C" => {
-                if self.status == "idle" {
+                if self.status == components::status::IDLE {
                     let max = self.input_buffer.chars().count();
                     if self.character_index < max {
                         self.character_index += 1;
@@ -177,9 +177,9 @@ impl App {
                 }
             }
             AppEvent::Input(_ch)
-                if self.status != "idle"
-                    && self.status != "waiting"
-                    && self.status != "waiting..." =>
+                if self.status != components::status::IDLE
+                    && self.status != components::status::WAITING
+                    && self.status != components::status::WAITING =>
             {
                 // AI is executing — discard stray keystrokes that may come
                 // from subprocesses writing to /dev/tty (e.g. sudo password
@@ -195,7 +195,7 @@ impl App {
                 self.messages.push(req.message.clone());
                 self.messages.push(req.hint.clone());
                 self.pending_prompt = Some(req);
-                self.status = "waiting...".into();
+                self.status = components::status::WAITING.into();
             }
             AppEvent::ScrollUp(lines) => {
                 if self.show_dashboard {
@@ -229,16 +229,16 @@ impl App {
                 }
                 let last = self.messages.len() - 1;
                 self.messages[last].push_str(&text);
-                self.status = "streaming".into();
+                self.status = components::status::STREAMING.into();
                 self.scroll_offset = 0;
             }
             AppEvent::ToolExec(text) => {
                 self.messages.push(format!("⚡ {text}"));
                 self.scroll_offset = 0;
-                self.status = "executing".into();
+                self.status = components::status::EXECUTING.into();
             }
             AppEvent::StreamDone => {
-                self.status = "idle".into();
+                self.status = components::status::IDLE.into();
                 self.blink = 0;
                 self.reasoning_content.clear();
                 if let Some(pending) = self.pending_prompt.take() {
@@ -248,7 +248,7 @@ impl App {
                 let ctx = self.ctx.clone();
                 let tx = self.event_tx.clone();
                 tokio::spawn(async move {
-                    let _ = tx.send(AppEvent::Status("compressing...".into()));
+                    let _ = tx.send(AppEvent::Status(components::status::COMPRESSING.into()));
                     if let Some(flash) = ctx.providers.flash() {
                         ctx.sessions.compress_all(&**flash).await;
                     }
@@ -361,7 +361,7 @@ impl App {
                 }
                 let last = self.messages.len() - 1;
                 self.messages[last].push_str(&text);
-                self.status = "thinking".into();
+                self.status = components::status::THINKING.into();
             }
             AppEvent::Tick => {
                 self.blink = (self.blink + 1) % 8;
@@ -387,13 +387,13 @@ impl App {
             AppEvent::Dismiss => {
                 if self.focused_tree.is_some() {
                     self.focused_tree = None;
-                } else if self.status != "idle" {
+                } else if self.status != components::status::IDLE {
                     // Esc during AI response: abort the streaming task.
                     info!("user aborted AI response");
                     if let Some(handle) = self.task_handle.take() {
                         handle.abort();
                     }
-                    self.status = "idle".into();
+                    self.status = components::status::IDLE.into();
                     self.messages.push("🤖 _(stopped)_".into());
                     self.blink = 0;
                 } else if self.show_dashboard {
@@ -424,7 +424,7 @@ impl App {
         self.ensure_session();
         self.thinking_mode = true;
         self.messages.push(format!("🧑 /plan {task}"));
-        self.status = "planning".into();
+        self.status = components::status::PLANNING.into();
 
         let provider = match self.ctx.providers.pick(task.len(), true) {
             Some(p) => p.clone(),
@@ -754,14 +754,14 @@ impl App {
         self.ensure_session();
 
         self.messages.push(format!("🧑 {prompt}"));
-        self.status = "thinking".into();
+        self.status = components::status::THINKING.into();
         self.scroll_offset = 0;
 
         let provider = match self.ctx.providers.pick(prompt.len(), true) {
             Some(p) => p.clone(),
             None => {
                 self.messages.push("🤖 No model provider available.".into());
-                self.status = "error".into();
+                self.status = components::status::ERROR.into();
                 return;
             }
         };
@@ -1251,7 +1251,7 @@ impl App {
                     return;
                 }
 
-                self.status = "thinking".into();
+                self.status = components::status::THINKING.into();
                 self.messages.push("🤖 Analyzing project structure — this may take a moment...".into());
                 self.scroll_offset = 0;
 
@@ -1721,7 +1721,7 @@ async fn run_project_init(ctx: SharedContext, tx: mpsc::UnboundedSender<AppEvent
     let probe_text = probe_parts.join("\n");
 
     // Call the AI to generate ARCC.md.
-    let _ = tx.send(AppEvent::Status("generating ARCC.md...".into()));
+    let _ = tx.send(AppEvent::Status(components::status::EXECUTING.into()));
     let provider = ctx.providers.pick(probe_text.len(), false);
     let init_system_content = r#"You are a project analyst. Analyze the project and generate a concise ARCC.md optimized for AI comprehension. Structure it as follows:
 
@@ -1748,7 +1748,7 @@ async fn run_project_init(ctx: SharedContext, tx: mpsc::UnboundedSender<AppEvent
 Write ONLY the ARCC.md content, no extra commentary, no section if it would be empty. Use clean markdown. Be specific — prefer concrete file paths, commands, and examples over generic advice."#;
 
     let mut full_content = String::new();
-    let _ = tx.send(AppEvent::Status("generating ARCC.md...".into()));
+    let _ = tx.send(AppEvent::Status(components::status::EXECUTING.into()));
 
     if let Some(prov) = provider {
         let init_system = arcc_core::model::types::ChatMessage {
@@ -1860,7 +1860,7 @@ pub async fn run(ctx: SharedContext) -> anyhow::Result<()> {
                         let input = app.input_buffer.trim().to_lowercase();
                         app.input_buffer.clear();
                         app.character_index = 0;
-                        app.status = "idle".into();
+                        app.status = components::status::IDLE.into();
                         let response = if input.is_empty() { None } else { Some(input) };
                         let _ = prompt.response_tx.send(response);
                         continue;
@@ -1979,7 +1979,7 @@ pub async fn run(ctx: SharedContext) -> anyhow::Result<()> {
         terminal.draw(|f| {
             let areas = components::main_layout(f.area());
 
-            let phase = if app.status != "idle" { app.blink } else { 99 };
+            let phase = if app.status != components::status::IDLE { app.blink } else { 99 };
             components::render_title(f, areas[0], &session_info.0, &session_info.1, phase);
 
             components::render_status(f, areas[2], &app.status, app.tick, app.thinking_mode);
