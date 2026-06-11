@@ -18,12 +18,20 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             ext: ""
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            ext: ""
+            deps: musl-tools
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             ext: ".exe"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install system deps
+        if: matrix.deps != ''
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.deps }}
 
       - name: Install Rust toolchain
         run: |
@@ -82,9 +90,9 @@ jobs:
 
       - name: Generate checksums
         run: |
-          cd arcc-aarch64-apple-darwin && sha256sum arcc-aarch64-apple-darwin.tar.gz >> ../checksums.txt
-          cd ../arcc-x86_64-unknown-linux-gnu && sha256sum arcc-x86_64-unknown-linux-gnu.tar.gz >> ../checksums.txt
-          cd ../arcc-x86_64-pc-windows-msvc && sha256sum arcc-x86_64-pc-windows-msvc.tar.gz >> ../checksums.txt
+          for dir in arcc-*/; do
+            cd "$dir" && sha256sum *.tar.gz >> ../checksums.txt && cd ..
+          done
 
       - name: Create release
         env:

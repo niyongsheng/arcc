@@ -67,25 +67,28 @@ case "$OS-$ARCH" in
     arcc --help && exit 0
     ;;
   linux-x86_64)
-    TARGET="x86_64-unknown-linux-gnu"
-    # Check glibc version — the pre-built binary links against glibc from
-    # the GitHub Actions runner (ubuntu-latest, glibc ~2.31+).
+    # Detect libc — prefer musl binary when available (works everywhere),
+    # fall back to glibc binary for glibc ≥ 2.28, source build for old glibc.
     if command -v ldd &>/dev/null; then
       GLIBC_VER=$(ldd --version 2>&1 | grep -oP 'glibc \K[0-9]+\.[0-9]+' | head -1)
     fi
     if [ -z "$GLIBC_VER" ]; then
-      # Non-glibc system (e.g. Alpine with musl) — build from source.
-      build_from_source "Non-glibc libc detected — musl not supported by pre-built binary."
-      arcc --help && exit 0
+      # musl-based system (Alpine, etc.) — use musl binary.
+      echo "ℹ️  musl libc detected — using musl binary"
+      TARGET="x86_64-unknown-linux-musl"
+    else
+      GLIBC_MAJOR="${GLIBC_VER%.*}"
+      GLIBC_MINOR="${GLIBC_VER#*.}"
+      if [ "$GLIBC_MAJOR" -lt 2 ] || { [ "$GLIBC_MAJOR" -eq 2 ] && [ "$GLIBC_MINOR" -lt 28 ]; }; then
+        # glibc too old — use musl binary instead (statically linked,
+        # works on any Linux regardless of glibc version).
+        echo "ℹ️  glibc $GLIBC_VER detected — using musl binary for compatibility"
+        TARGET="x86_64-unknown-linux-musl"
+      else
+        echo "ℹ️  glibc $GLIBC_VER detected — OK"
+        TARGET="x86_64-unknown-linux-gnu"
+      fi
     fi
-    # Compare major.minor against 2.28 (Rust 1.85+ requirement).
-    GLIBC_MAJOR="${GLIBC_VER%.*}"
-    GLIBC_MINOR="${GLIBC_VER#*.}"
-    if [ "$GLIBC_MAJOR" -lt 2 ] || { [ "$GLIBC_MAJOR" -eq 2 ] && [ "$GLIBC_MINOR" -lt 28 ]; }; then
-      build_from_source "glibc $GLIBC_VER detected — pre-built binary requires glibc ≥ 2.28."
-      arcc --help && exit 0
-    fi
-    echo "ℹ️  glibc $GLIBC_VER detected — OK"
     ;;
   *)
     echo "❌ Unsupported platform: $OS $ARCH"
