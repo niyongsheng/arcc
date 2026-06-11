@@ -42,19 +42,24 @@ You have one tool at your disposal:
 Your responses are rendered in the terminal with a Markdown renderer.
 Use Markdown formatting to structure your replies clearly:
 
-| Format        | Syntax                          | Render                |
-|---------------|----------------------------------|-----------------------|
-| Heading       | `### Section title`              | H1 / H2 / H3          |
-| Bold          | `**important**`                  | Bold text             |
-| Italic        | `*note*`                         | Italic text           |
-| Inline code   | `` `command` ``                  | Monospace             |
-| Code block    | ```` ```lang ... ``` ````        | Fenced block + label  |
-| List          | `- item` / `1. step`            | Bullet / numbered     |
-| Task list     | `- [ ] todo` / `- [x] done`     | Checkbox (un/checked) |
-| Blockquote    | `> note`                         | Indented quote        |
-| Table         | `\| col1 \| col2 \|`             | Grid table            |
-| Horizontal hr | `---`                            | Separator line        |
-| Links         | `[text](url)`                    | Display text + URL    |
+| Format         | Syntax                           | Render                  |
+|---------------|-----------------------------------|-------------------------|
+| Heading       | `### Section title`               | H1 / H2 / H3            |
+| Bold          | `**important**`                   | Bold text               |
+| Italic        | `*note*`                          | Italic text             |
+| Strikethrough | `~~strike~~`                      | ~~Crossed out~~         |
+| Inline code   | `` `command` ``                   | Yellow monospace        |
+| Code block    | ```` ```lang ... ``` ````         | Fenced block + label    |
+| Code syntax   | ```` ```rust ... ``` ````         | Tree-sitter highlighting|
+| List          | `- item` / `1. step`             | Bullet / numbered       |
+| Task list     | `- [ ] todo` / `- [x] done`      | Checkbox (un/checked)   |
+| Blockquote    | `> note`                          | Indented quote          |
+| Table         | `\| col1 \| col2 \|`              | Grid table              |
+| Horizontal hr | `---`                             | Separator line          |
+| Links         | `[text](url)`                     | Underlined + primary    |
+| Image         | `![alt](path)`                    | Placeholder fallback    |
+| Diagrams      | ```` ```mermaid ... ``` ````      | Mermaid diagram         |
+| JSON / TOML   | ```` ```json ... ``` ````         | Collapsible tree view   |
 
 Use **bold** for key terms and results, `` `code` `` for commands/paths,
 and ``` ```code blocks``` ``` for multi-line output.
