@@ -1291,13 +1291,30 @@ impl App {
                     let result = if let Some(prov) = provider {
                         let init_system = arcc_core::model::types::ChatMessage {
                             role: "system".into(),
-                            content: r#"You are a project analyst. Given a project's directory tree, config files, and git history, generate a concise ARCC.md file that will be used as project-level instructions for the AI assistant.
+                            content: r#"You are a project analyst. Given a project's directory tree, config files, and git history, generate an ARCC.md file following the structure below. This file will be used as project-level instructions for the AI assistant.
 
-The ARCC.md should include:
-- **Project Overview**: What this project does, its architecture, key technologies.
-- **Conventions**: Coding style, git conventions, testing practices.
-- **Common Tasks**: Build, test, run, deploy commands.
-- **Notes**: Anything non-obvious the AI needs to know.
+The ARCC.md must follow this structure (reference CLAUDE.md in the repo root for style):
+
+## Project Overview
+What this project does, its architecture, and why it exists.
+
+## Git Conventions
+Commit message style, branch naming rules.
+
+## Tech Stack
+Language, framework, key dependencies, build system.
+
+## Directory Structure
+Brief explanation of the project layout.
+
+## Architecture Highlights
+Key design decisions, important patterns, anything non-obvious.
+
+## Common Tasks
+Build / test / run / deploy commands.
+
+## Notes
+Any gotchas, environment requirements, or context the AI must know.
 
 Write ONLY the ARCC.md content, no extra commentary. Use clean markdown."#.into(),
                             tool_calls: None, tool_call_id: None, reasoning_content: None,

@@ -1,60 +1,44 @@
 # ARCC.md
 
 ## Project Overview
-ARCC (AI Rust Claude CLI) is a three-in-one personal AI assistant built in Rust.  
-It provides:
-- **TUI** (ratatui + crossterm) – interactive terminal interface
-- **CLI** – one-shot / pipe-friendly invocations
-- **Server** (axum) – daemon mode with Feishu SSE integration
+ARCC (AI Rust Claude CLI) is a three-in-one personal AI assistant using the DeepSeek API. It runs in three modes:
+- **TUI** (`arcc tui`): terminal-based interactive assistant (like Claude Code)
+- **CLI** (`arcc cli "prompt"`): one-shot or pipe-friendly CLI
+- **Server** (`arcc server --daemon`): auto-response service with Feishu SSE integration
 
-The backend uses **DeepSeek V4** (Pro/Flash) via a dedicated `arcc-core` crate that handles model interaction, safety checks, session management, context compression, and tool execution (shell commands, MCP plugins). Data persistence is handled by `arcc-storage` (SQLite for sessions/messages, TOML config, JSON Lines audit log).  
-The workspace also includes dedicated crates for each interface (`arcc-tui`, `arcc-cli`, `arcc-server`) and a root binary that dispatches to the selected mode.
+The codebase is a Rust workspace (edition 2024) containing:
+- `arcc-core`: model providers, safety engine, session manager, context compression, tool execution (MCP/Shell)
+- `arcc-storage`: SQLite for sessions/messages, TOML config, JSON Lines audit logs
+- `arcc-server`: axum-based server with Feishu SSE handler
+- `arcc-tui`: ratatui + crossterm TUI
+- `arcc-cli`: one-shot requests, PTY handling for interactive commands
+- Root binary `arcc` that dispatches to the above modes
+
+Key technologies: Rust, tokio, axum, ratatui, crossterm, portable-pty, rusqlite, clap, tiktoken-rs, DeepSeek V4 models.
 
 ## Conventions
-- **Rust 2024 edition**, workspace resolver 2.
-- **Commit messages** follow conventional commits: `feat:`, `fix:`, `chore:`, `docs:`, `refactor:`.
-- Code formatting with `cargo fmt`, linting with `cargo clippy`.
-- Configuration lives in `~/.arcc/config.toml` (defaults in `/config/config.toml`).
-- Tests are run workspace-wide with `cargo test`.
-- Use `anyhow` for application-level errors, `thiserror` for library crates.
+- **Code style**: standard Rust; format with `cargo fmt` and lint with `cargo clippy` across the workspace.
+- **Commit messages**: conventional commits (`feat:`, `fix:`, `chore:`, `docs:`, `refactor:`), as seen in git history.
+- **Testing**: unit tests inside `src/` (e.g., `#[cfg(test)]` modules), integration tests in `crates/arcc-core/tests/`. Run `cargo test --all` before pushing.
+- **Documentation**: keep `ARCC.md`, `CLAUDE.md`, and `docs/*.md` up to date with architectural decisions.
+- **Workspace dependencies**: declare all external deps once in root `Cargo.toml` `[workspace.dependencies]`, reference with `workspace = true`.
 
 ## Common Tasks
-```bash
-# Build (debug)
-cargo build
-
-# Build release
-cargo build --release
-
-# Run all tests
-cargo test --workspace
-
-# Format check
-cargo fmt --check
-
-# Lint (deny warnings)
-cargo clippy -- -D warnings
-
-# Run TUI
-cargo run -- tui
-
-# Run CLI one-shot
-cargo run -- cli "your prompt"
-
-# Run server in daemon mode
-cargo run -- server --daemon
-```
+- **Build**: `cargo build`
+- **Run TUI**: `cargo run -- tui` (needs `~/.arcc/config.toml` with DeepSeek API key)
+- **Run CLI**: `cargo run -- cli "Your prompt"`
+- **Run server**: `cargo run -- server --daemon`
+- **Test everything**: `cargo test --all`
+- **Lint & format**: `cargo clippy --all-targets --all-features` and `cargo fmt --all -- --check`
+- **Release build**: see `.github/workflows/release.yml`
+- **Health check**: `bash scripts/health_check.sh`
 
 ## Notes
-- The `/init` slash-command inside the TUI invokes AI to generate a project-level `ARCC.md` – the very file you are reading.
-- **Context compression** automatically runs after every AI response; maximum token budget is 300k.
-- **Interactive tree blocks** are rendered for JSON/TOML code blocks – they support expand/collapse and a raw toggle.
-- Markdown rendering supports strikethrough, syntax highlighting, Mermaid diagrams, tree views, and images.
-- `Esc` key aborts an in-progress AI streaming response.
-- Stray input from child processes during tool execution is discarded to keep the UI clean.
-- Key-repeat events (`KeyEventKind::Repeat`) are explicitly handled for backspace and character input.
-- Pasted content has CR (`\r`) stripped automatically.
-- For DeepSeek’s custom markup (`DSML`), see `docs/dsml-handling.md`.
-- Handling of interactive commands and sudo password prompts is documented in `docs/interactive-command-and-sudo-password-handling.md`.
-- The health check script is at `scripts/health_check.sh`, and installers are provided in `scripts/`.
-- CI workflows (format, clippy, test, release) are in `.github/workflows/`.
+- User configuration lives in `~/.arcc/config.toml` (template in `config/config.toml`) – API key, model selection, token limits, etc.
+- Context compression runs automatically after every AI response (managed by `arcc-core` session manager); `context_max_tokens` is set to 300k.
+- The TUI’s `/init` command uses AI to generate a project-level `ARCC.md`; ensure the generated file is reviewed and is not overwritten by accident.
+- Database files (SQLite) and audit logs are stored under `~/.arcc/data/` by default.
+- TUI key handling filters `KeyEventKind::Repeat` for all events; uses rotating line animation during tool calls and compression.
+- PTY-based command execution (e.g., interactive sudo) is handled by `arcc-cli` with `portable-pty`.
+- Server mode’s Feishu integration lives in `arcc-server`; it pushes events over SSE.
+- When modifying system prompts, note that markdown support now includes strikethrough, syntax highlighting, mermaid, collapsible trees, and image rendering.
