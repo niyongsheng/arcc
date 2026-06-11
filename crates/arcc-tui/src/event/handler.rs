@@ -22,7 +22,10 @@ pub fn spawn_input_handler(tx: mpsc::UnboundedSender<AppEvent>) -> tokio::task::
             }
 
             match event::read() {
-                Ok(CrosstermEvent::Key(key)) if key.kind == KeyEventKind::Press => {
+                Ok(CrosstermEvent::Key(key))
+                    if key.kind == KeyEventKind::Press
+                        || key.kind == KeyEventKind::Repeat =>
+                {
                     match key.code {
                         KeyCode::Char('c')
                             if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
@@ -60,17 +63,13 @@ pub fn spawn_input_handler(tx: mpsc::UnboundedSender<AppEvent>) -> tokio::task::
                         KeyCode::Down => {
                             let _ = tx.send(AppEvent::HistoryNext);
                         }
-                        KeyCode::Backspace if key.kind == KeyEventKind::Press
-                            || key.kind == KeyEventKind::Repeat =>
-                        {
+                        KeyCode::Backspace => {
                             let _ = tx.send(AppEvent::Input("\x08".into()));
                         }
                         KeyCode::Esc => {
                             let _ = tx.send(AppEvent::Dismiss);
                         }
-                        KeyCode::Char(ch) if key.kind == KeyEventKind::Press
-                            || key.kind == KeyEventKind::Repeat =>
-                        {
+                        KeyCode::Char(ch) => {
                             let _ = tx.send(AppEvent::Input(ch.to_string()));
                         }
                         _ => {}
