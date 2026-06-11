@@ -115,8 +115,8 @@ curl -sL "$URL" | tar xz -C "$TMP_DIR"
 BINARY="$TMP_DIR/arcc"
 [ ! -f "$BINARY" ] && { echo "❌ Download failed"; exit 1; }
 
-# Detect version tag from download redirect
-TAG=$(curl -sLI -o /dev/null -w '%{url_effective}' "$URL" 2>/dev/null | sed 's|.*/download/||;s|/arcc-.*||' || echo "")
+# Detect version tag from release redirect
+TAG=$(curl -sI -o /dev/null -w '%{redirect_url}' "https://github.com/$REPO/releases/latest" 2>/dev/null | sed 's|.*/tag/||' || echo "latest")
 
 install_binary "$BINARY" "$TAG"
 
