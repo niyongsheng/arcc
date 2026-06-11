@@ -23,6 +23,12 @@ pub fn run(conn: &Connection) -> Result<(), rusqlite::Error> {
         conn.pragma_update(None, "user_version", 3)?;
     }
 
+    if version < 4 {
+        info!("running migration v4: memories table");
+        conn.execute_batch(MIGRATION_V4)?;
+        conn.pragma_update(None, "user_version", 4)?;
+    }
+
     Ok(())
 }
 
@@ -83,4 +89,20 @@ CREATE TABLE IF NOT EXISTS input_history (
 );
 
 CREATE INDEX IF NOT EXISTS idx_input_history_created ON input_history(created_at DESC);
+"#;
+
+const MIGRATION_V4: &str = r#"
+CREATE TABLE IF NOT EXISTS memories (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     TEXT NOT NULL,
+    key         TEXT NOT NULL,
+    value       TEXT NOT NULL,
+    source      TEXT NOT NULL DEFAULT 'extraction'
+                CHECK(source IN ('extraction', 'manual')),
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(user_id, key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_memories_user ON memories(user_id);
 "#;

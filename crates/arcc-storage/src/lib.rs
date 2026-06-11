@@ -8,7 +8,7 @@ use tracing::info;
 
 use crate::audit::types::AuditEvent;
 use crate::db::queries;
-use crate::db::models::{InputHistoryEntry, Message, Session, Summary};
+use crate::db::models::{InputHistoryEntry, MemoryFact, Message, Session, Summary};
 
 /// Top-level initialisation: loads config, opens DB, runs migrations.
 ///
@@ -138,6 +138,38 @@ impl ArccStorage {
     pub fn recent_input_history(&self, limit: usize) -> Result<Vec<InputHistoryEntry>, StorageError> {
         let conn = self.db.lock().expect("db mutex poisoned");
         Ok(queries::list_input_history(&conn, limit)?)
+    }
+
+    // ── Memory (memories table) ─────────────────────────────────────
+
+    /// List all memory facts for a user.
+    pub fn list_memories(&self, user_id: &str) -> Result<Vec<MemoryFact>, StorageError> {
+        let conn = self.db.lock().expect("db mutex poisoned");
+        Ok(queries::list_memories(&conn, user_id)?)
+    }
+
+    /// Insert or update a memory fact.
+    pub fn upsert_memory(
+        &self,
+        user_id: &str,
+        key: &str,
+        value: &str,
+        source: &str,
+    ) -> Result<(), StorageError> {
+        let conn = self.db.lock().expect("db mutex poisoned");
+        Ok(queries::upsert_memory(&conn, user_id, key, value, source)?)
+    }
+
+    /// Delete a single memory fact. Returns `true` if deleted.
+    pub fn delete_memory(&self, user_id: &str, key: &str) -> Result<bool, StorageError> {
+        let conn = self.db.lock().expect("db mutex poisoned");
+        Ok(queries::delete_memory(&conn, user_id, key)?)
+    }
+
+    /// Delete all memory facts for a user. Returns number of rows deleted.
+    pub fn clear_memories(&self, user_id: &str) -> Result<usize, StorageError> {
+        let conn = self.db.lock().expect("db mutex poisoned");
+        Ok(queries::clear_memories(&conn, user_id)?)
     }
 
     /// Shortcut: init from the default home (`~/.arcc/`).

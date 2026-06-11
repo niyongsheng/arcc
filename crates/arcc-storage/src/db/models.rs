@@ -47,3 +47,14 @@ pub struct TokenUsage {
     pub input_tokens: i64,
     pub output_tokens: i64,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryFact {
+    pub id: Option<i64>,
+    pub user_id: String,
+    pub key: String,
+    pub value: String,
+    pub source: String,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+}

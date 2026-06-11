@@ -1,4 +1,5 @@
 use serde::Serialize;
+use serde_json::json;
 
 /// Feishu interactive message card — used for human-in-the-loop confirmations.
 #[derive(Debug, Clone, Serialize)]
@@ -31,6 +32,38 @@ pub enum CardElement {
 pub struct ButtonText {
     pub tag: String,
     pub text: String,
+}
+
+/// Build a card showing that an operation was approved (replaces buttons with
+/// a green status message). Returns a `serde_json::Value` suitable for
+/// `update_message`.
+pub fn build_approved_card(action: &str, details: &str) -> serde_json::Value {
+    json!({
+        "config": { "wide_screen_mode": true },
+        "header": {
+            "title": { "tag": "plain_text", "content": "✅ 操作已批准" },
+            "template": "green"
+        },
+        "elements": [
+            { "tag": "div", "text": { "tag": "lark_md", "content": format!("**操作**: {action}\n\n**状态**: ✅ 已批准\n\n{details}") } }
+        ]
+    })
+}
+
+/// Build a card showing that an operation was denied (replaces buttons with
+/// a red status message). Returns a `serde_json::Value` suitable for
+/// `update_message`.
+pub fn build_denied_card(action: &str, details: &str) -> serde_json::Value {
+    json!({
+        "config": { "wide_screen_mode": true },
+        "header": {
+            "title": { "tag": "plain_text", "content": "❌ 操作已拒绝" },
+            "template": "red"
+        },
+        "elements": [
+            { "tag": "div", "text": { "tag": "lark_md", "content": format!("**操作**: {action}\n\n**状态**: ❌ 已拒绝\n\n{details}") } }
+        ]
+    })
 }
 
 /// Build a "allow / deny" confirmation card for high-risk operations.

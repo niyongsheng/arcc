@@ -53,18 +53,30 @@ pub async fn handler(
 
     let system_msg = arcc_core::model::prompts::templates::server().to_chat_message();
 
+    // Inject known facts as a system message between system prompt and user message.
+    let memory_context = ctx.memory.format_for_context(&input.session_id);
+    let mut messages = Vec::with_capacity(3);
+    messages.push(system_msg);
+    if !memory_context.is_empty() {
+        messages.push(ChatMessage {
+            role: "system".into(),
+            content: memory_context,
+            tool_calls: None,
+            tool_call_id: None,
+            reasoning_content: None,
+        });
+    }
+    messages.push(ChatMessage {
+        role: "user".into(),
+        content: input.prompt.clone(),
+        tool_calls: None,
+        tool_call_id: None,
+        reasoning_content: None,
+    });
+
     let req = ChatRequest {
         model: provider.model_name().to_owned(),
-        messages: vec![
-            system_msg,
-            ChatMessage {
-                role: "user".into(),
-                content: input.prompt.clone(),
-                tool_calls: None,
-                tool_call_id: None,
-                reasoning_content: None,
-            },
-        ],
+        messages,
         tools: None,
         tool_choice: None,
         temperature: Some(ctx.storage.config.model.temperature),
@@ -149,6 +161,18 @@ pub async fn handler(
                                 tracing::warn!(err = %e, "failed to record token usage");
                             }
                             info!(response_len = full_response.len(), "chat complete");
+
+                            // Spawn background memory extraction.
+                            let mem_mgr = ctx.memory.clone();
+                            let uid = input.session_id.clone();
+                            let umsg = input.prompt.clone();
+                            let asst = full_response.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = mem_mgr.extract(&uid, &umsg, &asst).await {
+                                    tracing::warn!(err = %e, "memory extraction failed");
+                                }
+                            });
+
                             let _ = tx
                                 .send(Ok(Event::default().event("finish").data("[DONE]")))
                                 .await;

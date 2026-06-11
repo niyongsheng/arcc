@@ -34,13 +34,24 @@ pub async fn run(ctx: SharedContext, daemon: bool) -> anyhow::Result<()> {
 }
 
 fn build_router(ctx: SharedContext) -> axum::Router {
-    use axum::routing::{get, post};
+    use axum::routing::{get, post, put};
 
-    axum::Router::new()
+    let mut router = axum::Router::new()
         .route("/health", get(routes::health::handler))
         .route("/chat", post(routes::chat::handler))
-        .route("/feishu/webhook", post(feishu::webhook::handler))
-        .with_state(ctx)
+        .route("/memory/{user_id}", get(routes::memory::list_memories)
+            .post(routes::memory::create_memory))
+        .route("/memory/{user_id}/{key}", put(routes::memory::update_memory)
+            .delete(routes::memory::delete_memory));
+
+    // Only mount Feishu endpoints when configured.
+    if ctx.feishu_client.is_some() {
+        router = router
+            .route("/feishu/webhook", post(feishu::webhook::handler))
+            .route("/feishu/send", post(feishu::webhook::send_handler));
+    }
+
+    router.with_state(ctx)
 }
 
 async fn shutdown_signal() {

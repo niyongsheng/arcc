@@ -5,7 +5,7 @@
 
 use rusqlite::{params, Connection, Result};
 
-use super::models::{InputHistoryEntry, Message, Session, Summary};
+use super::models::{InputHistoryEntry, MemoryFact, Message, Session, Summary};
 
 /// Row returned by `token_usage_daily`.
 #[derive(Debug, Clone)]
@@ -200,4 +200,64 @@ pub fn list_input_history(conn: &Connection, limit: usize) -> Result<Vec<InputHi
         })
     })?;
     rows.collect()
+}
+
+// ── Memory (memories table) ─────────────────────────────────────
+
+/// List all memory facts for a user, newest first.
+pub fn list_memories(conn: &Connection, user_id: &str) -> Result<Vec<MemoryFact>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, user_id, key, value, source, created_at, updated_at
+         FROM memories
+         WHERE user_id = ?1
+         ORDER BY updated_at DESC",
+    )?;
+    let rows = stmt.query_map(params![user_id], |row| {
+        Ok(MemoryFact {
+            id: Some(row.get(0)?),
+            user_id: row.get(1)?,
+            key: row.get(2)?,
+            value: row.get(3)?,
+            source: row.get(4)?,
+            created_at: Some(row.get(5)?),
+            updated_at: Some(row.get(6)?),
+        })
+    })?;
+    rows.collect()
+}
+
+/// Insert or update a memory fact (`ON CONFLICT` upserts on user_id + key).
+pub fn upsert_memory(
+    conn: &Connection,
+    user_id: &str,
+    key: &str,
+    value: &str,
+    source: &str,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO memories (user_id, key, value, source, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, datetime('now'), datetime('now'))
+         ON CONFLICT(user_id, key) DO UPDATE SET
+             value = ?3, source = ?4, updated_at = datetime('now')",
+        params![user_id, key, value, source],
+    )?;
+    Ok(())
+}
+
+/// Delete a single memory fact. Returns `true` if a row was deleted.
+pub fn delete_memory(conn: &Connection, user_id: &str, key: &str) -> Result<bool> {
+    let n = conn.execute(
+        "DELETE FROM memories WHERE user_id = ?1 AND key = ?2",
+        params![user_id, key],
+    )?;
+    Ok(n > 0)
+}
+
+/// Delete all memory facts for a user. Returns the number of rows deleted.
+pub fn clear_memories(conn: &Connection, user_id: &str) -> Result<usize> {
+    let n = conn.execute(
+        "DELETE FROM memories WHERE user_id = ?1",
+        params![user_id],
+    )?;
+    Ok(n)
 }

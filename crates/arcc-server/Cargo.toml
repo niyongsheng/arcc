@@ -18,5 +18,6 @@ uuid.workspace = true
 chrono.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
+reqwest.workspace = true
 arcc-core.workspace = true
 arcc-storage.workspace = true

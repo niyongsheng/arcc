@@ -72,6 +72,7 @@ pub mod templates {
     const PLAN: &str = include_str!("plan.md");
     const SERVER: &str = include_str!("server.md");
     const COMPRESS: &str = include_str!("compress.md");
+    const MEMORY_EXTRACT: &str = include_str!("memory_extract.md");
 
     /// CLI mode system prompt — headless command execution.
     pub fn cli() -> SystemPrompt {
@@ -99,6 +100,12 @@ pub mod templates {
     /// Context compression system prompt — summarises conversation history.
     pub fn compress() -> SystemPrompt {
         SystemPrompt::new(COMPRESS.to_owned())
+    }
+
+    /// Memory extraction system prompt — extracts key-value facts from a
+    /// user-assistant exchange for persistent storage.
+    pub fn memory_extract() -> SystemPrompt {
+        SystemPrompt::new(MEMORY_EXTRACT.to_owned())
     }
 }
 
@@ -139,6 +146,13 @@ mod tests {
         let p = templates::compress();
         assert!(!p.as_str().is_empty());
         assert!(p.as_str().contains("summariser"));
+    }
+
+    #[test]
+    fn memory_extract_prompt_is_not_empty() {
+        let p = templates::memory_extract();
+        assert!(!p.as_str().is_empty());
+        assert!(p.as_str().contains("NO_NEW_FACTS"));
     }
 
     #[test]
