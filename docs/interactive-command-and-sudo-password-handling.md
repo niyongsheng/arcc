@@ -3,7 +3,7 @@
 ## 概述
 
 ARCC 通过 `execute_command` 工具执行 shell 命令。部分命令需要 TTY 交互
-（如 `sudo xxx`、`ssh`、`vim`、`mole clean` 等），这类命令不能通过管道
+（如 `sudo xxx`、`ssh`、`vim` 等），这类命令不能通过管道
 stdin/stdout 执行，必须直接绑定用户的终端。
 
 ARCC 的 `interactive` 机制解决两个核心问题：

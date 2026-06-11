@@ -39,7 +39,7 @@ pub fn command_tool_definition() -> ToolDefinition {
                     "description": "CRITICAL: Set to true for ANY command that may prompt for \
                                     user input, require elevated privileges, or run an \
                                     interactive TUI. Examples: sudo, ssh, vim, nano, htop, \
-                                    top, less, more, passwd, telnet, mole, package managers, \
+                                    top, less, more, passwd, telnet, package managers, \
                                     editors, password prompts. The TUI will temporarily exit \
                                     alternate screen and let the command access the real \
                                     terminal. Set to false only for batch commands that run \
