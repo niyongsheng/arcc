@@ -242,6 +242,7 @@ impl App {
             AppEvent::ToolExec(text) => {
                 self.messages.push(format!("⚡ {text}"));
                 self.scroll_offset = 0;
+                self.status = "executing".into();
             }
             AppEvent::StreamDone => {
                 self.status = "idle".into();
@@ -252,10 +253,13 @@ impl App {
                 }
                 // Trigger background context compression if session is over threshold.
                 let ctx = self.ctx.clone();
+                let tx = self.event_tx.clone();
                 tokio::spawn(async move {
+                    let _ = tx.send(AppEvent::ToolExec("compressing context...".into()));
                     if let Some(flash) = ctx.providers.flash() {
                         ctx.sessions.compress_all(&**flash).await;
                     }
+                    let _ = tx.send(AppEvent::ToolExec("compression done".into()));
                 });
             }
             AppEvent::HistoryPrev => {
