@@ -75,7 +75,10 @@ pub fn spawn_input_handler(tx: mpsc::UnboundedSender<AppEvent>) -> tokio::task::
                 Ok(CrosstermEvent::Paste(content)) => {
                     // Bracketed paste: send entire pasted content as one event.
                     // Embedded \n are part of the text, not Enter key presses.
-                    let _ = tx.send(AppEvent::Input(content));
+                    // Strip \r (CR) from CRLF line endings that macOS terminals
+                    // may include when pasting from other applications.
+                    let cleaned = content.replace('\r', "");
+                    let _ = tx.send(AppEvent::Input(cleaned));
                 }
                 Ok(CrosstermEvent::Resize(cols, rows)) => {
                     let _ = tx.send(AppEvent::Resize { cols, rows });
