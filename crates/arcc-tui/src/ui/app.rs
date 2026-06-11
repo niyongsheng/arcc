@@ -1223,7 +1223,7 @@ impl App {
                     let (resp_tx, resp_rx) = oneshot::channel();
                     let _ = self.event_tx.send(AppEvent::Prompt(PromptRequest {
                         message: cow_say("Overwrite ARCC.md?"),
-                        hint: "**y** yes · **n** no".into(),
+                        hint: "**[y]** yes · **[n]** no".into(),
                         response_tx: resp_tx,
                     }));
                     // Spawn a task to await the response.
