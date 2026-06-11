@@ -278,7 +278,7 @@ fn spinner_char(status: &str, tick: u64) -> char {
     let frames: &[char] = match status {
         "thinking" | "loading" | "planning" => FluxFrames::CLASSIC,
         "streaming" => FluxFrames::BOUNCE,
-        "executing" => FluxFrames::DICE,
+        "executing" => FluxFrames::LINE,
         "waiting" | "waiting..." => FluxFrames::DIAMOND,
         _ => return ' ',
     };
