@@ -339,10 +339,10 @@ async fn handle_card_action(ctx: &SharedContext, action: &CardActionPayload) {
     };
 
     // 3. Update the message to replace buttons with status text.
-    if let Some(client) = ctx.feishu_client.as_ref() {
-        if let Err(e) = client.update_message(&message_id, updated_card).await {
-            error!(err = %e, "failed to update feishu card");
-        }
+    if let Some(client) = ctx.feishu_client.as_ref()
+        && let Err(e) = client.update_message(&message_id, updated_card).await
+    {
+        error!(err = %e, "failed to update feishu card");
     }
 }
 

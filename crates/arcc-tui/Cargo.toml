@@ -18,5 +18,24 @@ serde_json.workspace = true
 arcc-core.workspace = true
 arcc-storage.workspace = true
 chrono.workspace = true
-ratatui-markdown = { version = "0.3.6", features = ["highlight", "highlight-lang-all"] }
+ratatui-markdown = { version = "0.3.6", features = [
+    "highlight",
+    "highlight-lang-bash",
+    "highlight-lang-c",
+    "highlight-lang-cpp",
+    "highlight-lang-css",
+    "highlight-lang-diff",
+    "highlight-lang-go",
+    "highlight-lang-html",
+    "highlight-lang-java",
+    "highlight-lang-javascript",
+    "highlight-lang-json",
+    "highlight-lang-python",
+    "highlight-lang-rust",
+    "highlight-lang-sql",
+    "highlight-lang-toml",
+    "highlight-lang-typescript",
+    "highlight-lang-xml",
+    "highlight-lang-yaml",
+] }
 tui-spinner = "0.2.3"
