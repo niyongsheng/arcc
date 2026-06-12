@@ -27,6 +27,9 @@ jobs:
             os: windows-latest
             ext: ".exe"
     runs-on: ${{ matrix.os }}
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
     steps:
       - uses: actions/checkout@v4
 
@@ -39,7 +42,10 @@ jobs:
           rustup toolchain install stable --profile minimal
           rustup target add ${{ matrix.target }}
 
-      - name: Rust cache
+      - name: sccache (compilation cache)
+        uses: mozilla-actions/sccache-action@v0
+
+      - name: Rust cache (dependencies)
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
