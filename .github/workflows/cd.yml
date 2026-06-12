@@ -43,7 +43,7 @@ jobs:
           rustup target add ${{ matrix.target }}
 
       - name: sccache (compilation cache)
-        uses: mozilla-actions/sccache-action@v0
+        uses: mozilla-actions/sccache-action@v0.0.10
 
       - name: Rust cache (dependencies)
         uses: Swatinem/rust-cache@v2
