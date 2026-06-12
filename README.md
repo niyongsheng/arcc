@@ -15,9 +15,9 @@
 
 | Mode | Command | Multi-Turn | Memory | Tool Call | Session Persist | Script/Pipe | IM Bot |
 |------|---------|:----------:|:------:|:---------:|:---------------:|:-----------:|:------:|
-| **TUI** | `arcc tui` [doc](docs/tutorial/tui-tutorial.md) | ✅ | — | ✅ | ✅ | — | — |
-| **CLI** | `arcc cli "<prompt>"` [doc](docs/tutorial/cli-tutorial.md) | — | — | ✅ | — | ✅ | — |
-| **Server** | `arcc server --daemon` [doc](docs/tutorial/server-tutorial.md) | ✅ | ✅ | — | ✅ | — | ✅ |
+| [**TUI**](docs/tutorial/tui-tutorial.md) | `arcc tui` | ✅ | — | ✅ | ✅ | — | — |
+| [**CLI**](docs/tutorial/cli-tutorial.md) | `arcc cli "<prompt>"` | — | — | ✅ | — | ✅ | — |
+| [**Server**](docs/tutorial/server-tutorial.md) | `arcc server --daemon` | ✅ | ✅ | — | ✅ | — | ✅ |
 
 ## Quick Start
 

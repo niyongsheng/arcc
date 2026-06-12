@@ -20,6 +20,7 @@ use tracing::{error, info, warn};
 
 use arcc_core::context::SharedContext;
 use arcc_core::model::types::{ChatMessage, ChatRequest};
+use arcc_core::tools;
 
 use super::card;
 
@@ -190,7 +191,7 @@ async fn handle_message_event(ctx: &SharedContext, event: &serde_json::Value) {
     });
 }
 
-/// Process a Feishu chat message: create session → LLM → send response.
+/// Process a Feishu chat message: LLM → tool calls → LLM → send response.
 async fn process_feishu_chat(
     ctx: &SharedContext,
     chat_id: &str,
@@ -199,7 +200,7 @@ async fn process_feishu_chat(
     user_text: &str,
 ) {
     // 1. Pick a provider.
-    let provider = match ctx.providers.pick(user_text.len(), false) {
+    let provider = match ctx.providers.pick(user_text.len(), true) {
         Some(p) => p.clone(),
         None => {
             warn!("no provider available for feishu chat");
@@ -211,7 +212,23 @@ async fn process_feishu_chat(
     // 2. Create/reuse session (keyed by chat_id).
     let session = ctx.sessions.create(chat_id, "feishu").await;
 
-    // 3. Build messages: system prompt + memory + current user text.
+    // 3. Persist user message.
+    let user_tokens = provider.count_tokens(user_text);
+    {
+        let mut s = session.write().await;
+        s.push_message(
+            ChatMessage {
+                role: "user".into(),
+                content: user_text.to_owned(),
+                tool_calls: None,
+                tool_call_id: None,
+                reasoning_content: None,
+            },
+            user_tokens,
+        );
+    }
+
+    // 4. Build initial messages: system prompt + memory + current user text.
     let system_msg = arcc_core::model::prompts::templates::server().to_chat_message();
     let memory_context = ctx.memory.format_for_context(chat_id);
 
@@ -234,63 +251,111 @@ async fn process_feishu_chat(
         reasoning_content: None,
     });
 
-    // 4. Persist user message.
-    let user_tokens = provider.count_tokens(user_text);
-    {
-        let mut s = session.write().await;
-        s.push_message(
-            ChatMessage {
-                role: "user".into(),
-                content: user_text.to_owned(),
-                tool_calls: None,
-                tool_call_id: None,
-                reasoning_content: None,
-            },
-            user_tokens,
-        );
-    }
+    // 5. Two-phase tool calling loop.
+    let tool_def = tools::command_tool_definition();
+    let temperature = ctx.storage.config.model.temperature;
+    let max_tokens = ctx.storage.config.model.max_output_tokens;
+    let mut phase = 1;
 
-    // 5. Call LLM (non-streaming).
-    let req = ChatRequest {
-        model: provider.model_name().to_owned(),
-        messages,
-        tools: None,
-        tool_choice: None,
-        temperature: Some(ctx.storage.config.model.temperature),
-        max_tokens: Some(ctx.storage.config.model.max_output_tokens),
-        stream: false,
-        thinking_mode: None,
-        reasoning_effort: None,
-    };
+    let reply_text = loop {
+        let has_tools = phase == 1;
+        let req = ChatRequest {
+            model: provider.model_name().to_owned(),
+            messages: messages.clone(),
+            tools: if has_tools { Some(vec![tool_def.clone()]) } else { None },
+            tool_choice: if has_tools { Some(serde_json::json!("auto")) } else { None },
+            temperature: Some(temperature),
+            max_tokens: Some(max_tokens),
+            stream: false,
+            thinking_mode: None,
+            reasoning_effort: None,
+        };
 
-    let response = match provider.chat(req).await {
-        Ok(r) => r,
-        Err(e) => {
-            error!(err = %e, "LLM call failed for feishu message");
-            send_fallback(ctx, open_id, "Sorry, I encountered an error processing your message.").await;
-            return;
+        let response = match provider.chat(req).await {
+            Ok(r) => r,
+            Err(e) => {
+                error!(err = %e, "LLM call failed for feishu message");
+                send_fallback(ctx, open_id, "Sorry, I encountered an error processing your message.").await;
+                return;
+            }
+        };
+
+        let msg = response.message;
+
+        // Persist assistant response.
+        let asst_tokens = provider.count_tokens(&msg.content);
+        {
+            let mut s = session.write().await;
+            s.push_message(
+                ChatMessage {
+                    role: "assistant".into(),
+                    content: msg.content.clone(),
+                    tool_calls: msg.tool_calls.clone(),
+                    tool_call_id: None,
+                    reasoning_content: msg.reasoning_content.clone(),
+                },
+                asst_tokens,
+            );
         }
+
+        // Phase 2: no tools — use content as final reply.
+        if !has_tools || msg.tool_calls.as_ref().is_some_and(|c| c.is_empty()) {
+            break msg.content;
+        }
+
+        // Execute tool calls (phase 1).
+        let tool_calls = msg.tool_calls.unwrap_or_default();
+        for tc in &tool_calls {
+            info!(tool = %tc.name, id = %tc.id, "executing feishu tool call");
+            let command = tc.arguments["command"].as_str().unwrap_or("").to_owned();
+            let al = ctx.allowlist.read().await;
+
+            let (tool_ok, tool_content) = match tools::execute_command(&command, &al, true).await {
+                Ok(output) => {
+                    let content = if output.stderr.is_empty() {
+                        output.stdout
+                    } else {
+                        format!("exit_code: {:?}\nstdout:\n{}\nstderr:\n{}",
+                            output.exit_code, output.stdout, output.stderr)
+                    };
+                    (true, content)
+                }
+                Err(e) => (false, e.to_string()),
+            };
+            drop(al);
+            info!(tool = %tc.name, ok = tool_ok, "tool executed");
+
+            let tool_content_clone = tool_content.clone();
+            let tool_msg = ChatMessage {
+                role: "tool".into(),
+                content: tool_content_clone,
+                tool_calls: None,
+                tool_call_id: Some(tc.id.clone()),
+                reasoning_content: None,
+            };
+            messages.push(tool_msg);
+
+            // Persist tool result.
+            {
+                let mut s = session.write().await;
+                s.push_message(
+                    ChatMessage {
+                        role: "tool".into(),
+                        content: tool_content.clone(),
+                        tool_calls: None,
+                        tool_call_id: Some(tc.id.clone()),
+                        reasoning_content: None,
+                    },
+                    provider.count_tokens(&tool_content),
+                );
+            }
+        }
+
+        // Move to phase 2 for next LLM call (no tools, just summarise).
+        phase = 2;
     };
 
-    let reply_text = response.message.content;
-
-    // 6. Persist assistant response.
-    let asst_tokens = provider.count_tokens(&reply_text);
-    {
-        let mut s = session.write().await;
-        s.push_message(
-            ChatMessage {
-                role: "assistant".into(),
-                content: reply_text.clone(),
-                tool_calls: None,
-                tool_call_id: None,
-                reasoning_content: None,
-            },
-            asst_tokens,
-        );
-    }
-
-    // 7. Send reply via Feishu API.
+    // 6. Send reply via Feishu API.
     let client = match ctx.feishu_client.as_ref() {
         Some(c) => c,
         None => {
@@ -306,7 +371,7 @@ async fn process_feishu_chat(
         error!(err = %e, "failed to send feishu reply");
     }
 
-    // 8. Background memory extraction.
+    // 7. Background memory extraction.
     let mem_mgr = ctx.memory.clone();
     let uid = chat_id.to_owned();
     let umsg = user_text.to_owned();
