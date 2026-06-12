@@ -90,7 +90,7 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "arcc"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "arcc-cli",
@@ -108,7 +108,7 @@ dependencies = [
 
 [[package]]
 name = "arcc-cli"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "arcc-core",
@@ -125,7 +125,7 @@ dependencies = [
 
 [[package]]
 name = "arcc-core"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "arcc-storage",
  "async-trait",
@@ -145,7 +145,7 @@ dependencies = [
 
 [[package]]
 name = "arcc-server"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "arcc-core",
@@ -169,7 +169,7 @@ dependencies = [
 
 [[package]]
 name = "arcc-storage"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "chrono",
  "notify",
@@ -187,7 +187,7 @@ dependencies = [
 
 [[package]]
 name = "arcc-tui"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "arcc-core",
