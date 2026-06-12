@@ -391,7 +391,7 @@ pub(crate) async fn process_feishu_chat(
             let (tool_ok, tool_content) = if tc.name == "reply_to_user" {
                 let message = tc.arguments["message"].as_str().unwrap_or("");
                 match client
-                    .send_message_to(&reply_id, &reply_id_type, post_md(message), "post")
+                    .send_message_to(&reply_id, reply_id_type, post_md(message), "post")
                     .await
                 {
                     Ok(()) => {
@@ -482,7 +482,7 @@ pub(crate) async fn process_feishu_chat(
                         next_run.format("%Y-%m-%d %H:%M:%S UTC"),
                     );
                     let _ = client
-                        .send_message_to(&reply_id, &reply_id_type, post_md(&confirm), "post")
+                        .send_message_to(&reply_id, reply_id_type, post_md(&confirm), "post")
                         .await;
                 }
 
@@ -598,7 +598,7 @@ pub(crate) async fn process_feishu_chat(
 
     // 8. Send the final result back to the user.
     if let Err(e) = client
-        .send_message_to(&reply_id, &reply_id_type, post_md(&reply_text), "post")
+        .send_message_to(&reply_id, reply_id_type, post_md(&reply_text), "post")
         .await
     {
         warn!(err = %e, "failed to send feishu result");

@@ -47,10 +47,8 @@ pub async fn scheduler_loop(ctx: SharedContext) {
 
         // Compress overgrown sessions every hour (~360 ticks).
         // This is an LLM call (flash model) so we don't want it on every tick.
-        if tick_count % 360 == 0 {
-            if let Some(flash) = ctx.providers.flash() {
-                ctx.sessions.compress_all(flash.as_ref()).await;
-            }
+        if tick_count.is_multiple_of(360) && let Some(flash) = ctx.providers.flash() {
+            ctx.sessions.compress_all(flash.as_ref()).await;
         }
 
         if tasks.is_empty() {
