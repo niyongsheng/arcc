@@ -32,15 +32,33 @@ use super::card;
 /// The `msg_type: "post"` already indicates this is a rich-text post, so the
 /// content JSON string has NO outer `"post"` wrapper — it starts with the
 /// language key (`zh_cn`) directly.  Uses `tag: md` for CommonMark/GFM.
+///
+/// If `text` is empty, falls back to a placeholder — Feishu's `md` tag
+/// rejects an empty `content` field.
 fn post_md(text: &str) -> serde_json::Value {
+    let content = if text.trim().is_empty() {
+        "(no content)"
+    } else {
+        text
+    };
     json!({
         "zh_cn": {
             "title": "ARCC",
             "content": [[
-                { "tag": "md", "content": text }
+                { "tag": "md", "content": content }
             ]]
         }
     })
+}
+
+/// In group chats, prepend an @mention so the sender gets notified.
+/// The mention uses Feishu's `<at id="open_id">` syntax inside markdown.
+fn maybe_mention(text: &str, chat_type: &str, open_id: &str) -> String {
+    if chat_type == "group" {
+        format!("<at id=\"{open_id}\"></at> {text}")
+    } else {
+        text.to_owned()
+    }
 }
 
 /// Feishu schema 2.0 event header.
@@ -388,8 +406,9 @@ pub(crate) async fn process_feishu_chat(
 
             let (tool_ok, tool_content) = if tc.name == "reply_to_user" {
                 let message = tc.arguments["message"].as_str().unwrap_or("");
+                let msg_with_mention = maybe_mention(message, chat_type, open_id);
                 match client
-                    .send_message_to(&reply_id, reply_id_type, post_md(message), "post")
+                    .send_message_to(&reply_id, reply_id_type, post_md(&msg_with_mention), "post")
                     .await
                 {
                     Ok(()) => {
@@ -479,8 +498,9 @@ pub(crate) async fn process_feishu_chat(
                         cron,
                         next_run.format("%Y-%m-%d %H:%M:%S UTC"),
                     );
+                    let confirm_with_mention = maybe_mention(&confirm, chat_type, open_id);
                     let _ = client
-                        .send_message_to(&reply_id, reply_id_type, post_md(&confirm), "post")
+                        .send_message_to(&reply_id, reply_id_type, post_md(&confirm_with_mention), "post")
                         .await;
                 }
 
@@ -595,8 +615,9 @@ pub(crate) async fn process_feishu_chat(
     };
 
     // 8. Send the final result back to the user.
+    let reply_with_mention = maybe_mention(&reply_text, chat_type, open_id);
     if let Err(e) = client
-        .send_message_to(&reply_id, reply_id_type, post_md(&reply_text), "post")
+        .send_message_to(&reply_id, reply_id_type, post_md(&reply_with_mention), "post")
         .await
     {
         warn!(err = %e, "failed to send feishu result");
@@ -625,8 +646,9 @@ async fn send_fallback(ctx: &SharedContext, chat_id: &str, chat_type: &str, open
     } else {
         (open_id.to_owned(), "open_id")
     };
+    let text_with_mention = maybe_mention(text, chat_type, open_id);
     let _ = client
-        .send_message_to(&reply_id, reply_id_type, post_md(text), "post")
+        .send_message_to(&reply_id, reply_id_type, post_md(&text_with_mention), "post")
         .await;
 }
 
