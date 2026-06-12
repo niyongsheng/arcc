@@ -180,8 +180,42 @@ arcc cli has **no memory** between calls. If a task requires multiple steps:
 | `unrecognized option '--json'` | Outdated arcc | `arcc` version too old, suggest update |
 | `"status": "error"` with `exit_code != 0` | Command failed | Check stderr, fix parameters, retry |
 | `"status": "partial"` | Some commands succeeded, some failed | Report both, retry only failed ones |
+| `sudo` hangs or times out | No TTY to input password | See **Sudo & Privilege** below |
 
-## Typical Use Cases
+## Sudo & Privilege
+
+arcc cli runs commands through a pseudo-terminal (PTY). When called by
+another AI agent (via MCP / pipe), there is no human to type a sudo
+password — commands like `sudo systemctl restart nginx` will **hang**
+waiting for password input.
+
+### AI-agent behaviour
+
+When you (the calling agent) need a command that requires `sudo`:
+
+1. **Try `sudo -n` first** — non-interactive mode. If the user has
+   NOPASSWD configured, it succeeds immediately. If not, it fails
+   with `sudo: a password is required` instead of hanging.
+2. **Report the failure** — tell the user which command needs sudo
+   and ask them to set up passwordless sudo for it.
+
+### Recommended setup
+
+**Passwordless sudo for specific commands** (safest):
+
+```bash
+# As root or via sudo visudo -f /etc/sudoers.d/arcc
+echo "$USER ALL=(ALL) NOPASSWD: /usr/bin/systemctl, /usr/bin/docker" | sudo tee /etc/sudoers.d/arcc
+```
+
+This lets arcc run `sudo systemctl restart nginx` and `sudo docker ps`
+without a password, while other sudo commands still prompt normally.
+
+**Full passwordless sudo** (convenient, less secure):
+
+```bash
+echo "$USER ALL=(ALL) NOPASSWD: ALL" | sudo tee /etc/sudoers.d/arcc
+
 
 | Category | Example Prompt |
 |----------|---------------|
