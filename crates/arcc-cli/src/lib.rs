@@ -74,7 +74,7 @@ pub async fn run(
     // --- LLM call with tool support ---
     let provider = ctx
         .providers
-        .pick(prompt.len(), true)
+        .pick(prompt, true)
         .ok_or_else(|| anyhow::anyhow!("no model provider available"))?
         .clone();
 

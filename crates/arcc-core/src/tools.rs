@@ -141,6 +141,35 @@ pub fn list_scheduled_tasks_definition() -> ToolDefinition {
     }
 }
 
+/// Returns the `use_pro_model` tool definition.
+///
+/// Allows the AI to switch from Flash (default) to Pro for tasks that
+/// require deeper reasoning — analysis, debugging, design, etc.
+pub fn use_pro_model_definition() -> ToolDefinition {
+    ToolDefinition {
+        name: "use_pro_model".into(),
+        description: "Switch to the Pro model (DeepSeek-V4-Pro) for this turn. \
+                      Use this when the user's request requires deep reasoning, \
+                      complex analysis, debugging, design, or any task where \
+                      you need more thinking capacity. The Pro model is more \
+                      capable but slower and more expensive — only use when \
+                      necessary. Call early in your response, before making \
+                      tool calls."
+            .into(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "description": "Why you need the Pro model (e.g. 'need deep log analysis')"
+                }
+            },
+            "required": ["reason"]
+        }),
+        strict: false,
+    }
+}
+
 /// Returns the `cancel_scheduled_task` tool definition.
 pub fn cancel_scheduled_task_definition() -> ToolDefinition {
     ToolDefinition {

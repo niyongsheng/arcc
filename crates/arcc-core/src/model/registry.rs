@@ -42,14 +42,33 @@ impl ProviderRegistry {
         self.providers.get(&self.flash_model)
     }
 
-    /// Pick pro or flash based on task complexity heuristic.
+    /// Pick pro or flash based on task complexity.
     ///
-    /// When tools are needed, always use flash (`deepseek-chat`) since it
-    /// has the most reliable streaming tool-calling support.
-    pub fn pick(&self, prompt_len: usize, has_tools: bool) -> Option<&Arc<dyn ModelProvider>> {
-        if has_tools {
-            self.flash()
-        } else if prompt_len > 256 {
+    /// Uses a hybrid heuristic:
+    /// - Prompt contains complexity keywords (分析, debug, optimize, why, 根因, …) → Pro
+    /// - Long prompt (>256 chars) → Pro
+    /// - Everything else → Flash
+    ///
+    /// The caller can always override by calling `.pro()` or `.flash()` directly.
+    pub fn pick(&self, prompt: &str, _has_tools: bool) -> Option<&Arc<dyn ModelProvider>> {
+        /// Keywords suggesting the user needs deep reasoning.
+        const COMPLEXITY_KEYWORDS: &[&str] = &[
+            // Chinese
+            "分析", "为什么", "根因", "调试", "优化", "设计", "架构",
+            "比较", "解释", "如何实现", "对比", "总结", "评估", "预测",
+            "推理", "规划", "方案", "原理", "机制", "区别",
+            // English
+            "analyze", "why", "root cause", "debug", "optimize",
+            "design", "architecture", "refactor", "explain",
+            "compare", "performance", "security",
+        ];
+
+        let lower = prompt.to_lowercase();
+        let has_complex_keyword = COMPLEXITY_KEYWORDS
+            .iter()
+            .any(|k| lower.contains(k));
+
+        if prompt.len() > 256 || (prompt.len() > 30 && has_complex_keyword) {
             self.pro()
         } else {
             self.flash()

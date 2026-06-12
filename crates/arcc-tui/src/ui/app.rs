@@ -455,7 +455,7 @@ impl App {
         self.messages.push(format!("🧑 /plan {task}"));
         self.status = components::status::PLANNING.into();
 
-        let provider = match self.ctx.providers.pick(task.len(), true) {
+        let provider = match self.ctx.providers.pick(task, true) {
             Some(p) => p.clone(),
             None => {
                 self.messages.push("🤖 No model provider available.".into());
@@ -588,7 +588,7 @@ impl App {
         self.status = components::status::THINKING.into();
         self.scroll_offset = 0;
 
-        let provider = match self.ctx.providers.pick(prompt.len(), true) {
+        let provider = match self.ctx.providers.pick(&prompt, true) {
             Some(p) => p.clone(),
             None => {
                 self.messages.push("🤖 No model provider available.".into());
@@ -1520,7 +1520,7 @@ async fn run_project_init(ctx: SharedContext, tx: mpsc::UnboundedSender<AppEvent
 
     // Call the AI to generate ARCC.md.
     let _ = tx.send(AppEvent::Status(components::status::EXECUTING.into()));
-    let provider = ctx.providers.pick(probe_text.len(), false);
+    let provider = ctx.providers.pick(&probe_text, false);
     let init_system_content = r#"You are a project analyst. Analyze the project and generate a concise ARCC.md optimized for AI comprehension. Structure it as follows:
 
 ## Project Overview — One-paragraph elevator pitch: what, why, tech stack, target audience.

@@ -40,7 +40,7 @@ pub async fn handler(
 
     let provider = ctx
         .providers
-        .pick(input.prompt.len(), false)
+        .pick(&input.prompt, false)
         .ok_or_else(|| {
             (
                 StatusCode::SERVICE_UNAVAILABLE,

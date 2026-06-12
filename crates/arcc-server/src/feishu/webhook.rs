@@ -33,19 +33,21 @@ use super::card;
 /// content JSON string has NO outer `"post"` wrapper — it starts with the
 /// language key (`zh_cn`) directly.  Uses `tag: md` for CommonMark/GFM.
 ///
-/// If `text` is empty, falls back to a placeholder — Feishu's `md` tag
-/// rejects an empty `content` field.
-fn post_md(text: &str) -> serde_json::Value {
-    let content = if text.trim().is_empty() {
+/// Note: Feishu's `md` tag uses `text` (not `content`) as the field name
+/// for the markdown body. Using `content` causes `text field can't be nil`.
+///
+/// If `text` is empty, falls back to a placeholder.
+fn post_md(md_text: &str) -> serde_json::Value {
+    let safe_text = if md_text.trim().is_empty() {
         "(no content)"
     } else {
-        text
+        md_text
     };
     json!({
         "zh_cn": {
             "title": "ARCC",
             "content": [[
-                { "tag": "md", "content": content }
+                { "tag": "md", "text": safe_text }
             ]]
         }
     })
@@ -258,15 +260,19 @@ pub(crate) async fn process_feishu_chat(
     _message_id: &str,
     user_text: &str,
 ) {
-    // 1. Pick a provider.
-    let provider = match ctx.providers.pick(user_text.len(), true) {
+    // 1. Start with Flash (fast, cheap). The AI can call `use_pro_model`
+    //    during the tool loop to switch to Pro for complex reasoning.
+    let mut provider = match ctx.providers.flash() {
         Some(p) => p.clone(),
         None => {
-            warn!("no provider available for feishu chat");
+            warn!("no flash provider available for feishu chat");
             send_fallback(ctx, chat_id, chat_type, open_id, "Service unavailable: no model provider").await;
             return;
         }
     };
+
+    // The AI can request a switch to Pro mid-conversation via use_pro_model.
+    let pro_provider = ctx.providers.pro().cloned();
 
     // 2. Create/reuse session (keyed by chat_id for continuous conversation).
     let session = ctx.sessions.get_or_create(chat_id, "feishu").await;
@@ -331,6 +337,7 @@ pub(crate) async fn process_feishu_chat(
     let tool_defs = vec![
         tools::command_tool_definition(),
         tools::reply_to_user_definition(),
+        tools::use_pro_model_definition(),
         tools::schedule_task_definition(),
         tools::list_scheduled_tasks_definition(),
         tools::cancel_scheduled_task_definition(),
@@ -534,6 +541,14 @@ pub(crate) async fn process_feishu_chat(
                         ));
                     }
                     (true, lines)
+                }
+            } else if tc.name == "use_pro_model" {
+                if let Some(ref pro) = pro_provider {
+                    provider = pro.clone();
+                    info!("switched to Pro model for complex task");
+                    (true, "Switched to Pro model. I now have more reasoning capacity to handle this task.".into())
+                } else {
+                    (false, "Pro model is not available.".into())
                 }
             } else if tc.name == "cancel_scheduled_task" {
                 let task_id = tc.arguments["task_id"].as_str().unwrap_or("");
