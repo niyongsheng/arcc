@@ -11,6 +11,7 @@ ARCC (AI Rust Claude CLI) — 基于 Rust 2024 的终端常驻通用 AI Agent，
 - **Push rule**: commit only by default; push only on explicit instruction.
 - **Branch naming**: `feature/`, `fix/`, `chore/` prefix followed by short kebab-case description.
 - **Commit messages**: Must be written in **English**. Use imperative mood, concise and descriptive (e.g. `Fix model fallback on rate limit`, `Add session export endpoint`).
+- **Version bump**: Before tagging a release, bump `version` in root `Cargo.toml` (workspace package). Patch=bugfix, minor=feature, major=breaking. Then `git tag v<version>` and `git push origin <tag>`.
 
 ## 主体技术选型
 

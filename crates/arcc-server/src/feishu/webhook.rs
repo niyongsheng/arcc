@@ -300,10 +300,24 @@ async fn process_feishu_chat(
             );
         }
 
-        // Phase 2: no tools — use content as final reply.
-        if !has_tools || msg.tool_calls.as_ref().is_some_and(|c| c.is_empty()) {
+        // Phase 2 (no tools), or phase 1 with no tool_calls (LLM chose to
+        // reply directly) — use content as final reply.
+        if !has_tools || msg.tool_calls.as_ref().is_none_or(|c| c.is_empty()) {
             break msg.content;
         }
+
+        // Push the assistant message into the messages vector so the
+        // subsequent tool result has a preceding assistant(tool_calls)
+        // entry.  Omitting this causes DeepSeek API to return 400:
+        // "Messages with role 'tool' must be a response to a preceding
+        // message with 'tool_calls'".
+        messages.push(ChatMessage {
+            role: "assistant".into(),
+            content: msg.content.clone(),
+            tool_calls: msg.tool_calls.clone(),
+            tool_call_id: None,
+            reasoning_content: msg.reasoning_content.clone(),
+        });
 
         // Execute tool calls (phase 1).
         let tool_calls = msg.tool_calls.unwrap_or_default();

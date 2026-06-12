@@ -1,38 +1,120 @@
-# ARCC CLI — Stateless Shell Sub-Agent for AI
+---
+name: arcc-cli
+description: AI sub-agent — delegate shell/system/git/docker tasks to LLM
+---
 
-`arcc cli` is a **stateless shell execution sub-agent**: it translates
-natural language into shell commands, executes them, and returns structured
-results — all in one shot, with no conversation history and no ability to
-ask the user questions. Designed for AI-to-AI calling.
+`arcc cli` is an **LLM-powered sub-agent**. You give it a goal in natural language; it plans the steps, executes shell commands, interprets results, and returns a structured summary — all in one shot.
 
-Any AI coding agent (Claude Code, Codex, Cursor, Windsurf, etc.) can invoke
-it via a simple shell call — no MCP server or special configuration required.
+It handles messy, labor-intensive grunt work so you stay focused on higher-level reasoning.
 
-## Quick Reference
+## Core Identity
+
+**arcc is an AI sub-agent, not a command runner.** It has its own:
+
+- **Reasoning engine** — understands complex natural language instructions
+- **Tool-calling loop** — can run multiple shell commands, see intermediate results, and adapt its plan
+- **Response generation** — produces a natural language summary of what happened, not just raw output
+- **Batch capability** — decompose a single high-level goal into multiple shell commands automatically
+
+You delegate **what to do**; arcc figures out **how to do it**.
+
+### Stateless Constraint
+
+Each call is **stateless** — no conversation history between calls and no ability to ask clarifying questions. Formulate your prompt as a complete, self-contained task description.
+
+## When to Use
+
+| ✅ Delegate to arcc | ❌ Don't use — stay here |
+|----------------|------------------------------|
+| **System info** — disk, memory, CPU, network, processes | **Conversation** — multi-turn chat, planning, reasoning (you are better at this) |
+| **File operations** — find, grep, sort, count, transform | **Interactive commands** — anything needing TTY (vim, nano, htop, ssh) |
+| **Git queries** — status, log, diff, branch | **Long-running** — `tail -f`, `watch`, server processes |
+| **Docker / container** — ps, logs, exec (non-interactive) | **Writing/editing code** — prefer Write/Edit tool directly |
+| **Code analysis** — lint, test run, build check | **Package install** — unless explicitly asked |
+| **Log analysis** — find patterns, count errors | **Anything you can do with Read/Grep/Glob tools** (faster) |
+| **Bulk operations** — batch rename, cleanup, backup | |
+| **Multi-step tasks** that chain several commands | |
+
+**Cost optimization**: arcc runs on cheaper LLM (significantly cheaper per-token than Claude high-end models). Delegate token-intensive tasks — bulk grep/log analysis, multi-step shell scripts, large-file scanning — to arcc to burn cheaper tokens while your expensive Claude context stays focused on high-level reasoning.
+
+**Rule of thumb**: If you'd need to chain 3+ shell commands to get the answer, delegate to arcc — it will plan the chain itself. If it's a single `ls`/`df`/`grep`, just run it directly.
+
+## Calling Convention
 
 ```bash
-# Basic — ask and execute
-arcc cli --json "check disk usage"
+# Delegate a task (arcc plans and executes)
+arcc cli --json "check disk usage and identify top 5 largest directories"
 
-# Skip safety blocks (rm, dd, mkfs, etc.)
-arcc cli --json --unsafe "delete all .log files in /tmp"
+# With unsafe flag for destructive operations
+arcc cli --json --unsafe "delete all .log files older than 30 days"
 
 # Pipe data for analysis
-cat error.log | arcc cli --json "find the most frequent error"
+cat app.log | arcc cli --json "find error patterns and suggest root cause"
 ```
 
-## Output Format
+### Parameter Reference
 
-Every call with `--json` returns a single JSON object on stdout:
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `prompt` | ✅ | Natural language **goal description**. Give context: file paths, targets, conditions |
+| `--json` | recommended | Output single JSON object. Always use for AI-to-AI calling |
+| `--unsafe` | optional | Skip safety allowlist for destructive operations |
+| `!command` | — | Bypass arcc's LLM, run a raw shell command directly (see below) |
+
+### `!command` — Raw Shell Bypass
+
+Prefix a command with `!` to skip the DeepSeek-V4 reasoning entirely and execute it as a raw shell command:
+
+```
+arcc cli --json "!df -h"
+arcc cli --json "!ls -la /tmp"
+```
+
+Use when:
+- You know **exactly** what command to run (no planning needed)
+- You want **raw stdout** in `tool_calls[].stdout` without AI interpretation overhead
+- Debugging or diagnostic scenarios
+
+Don't use for: complex tasks that benefit from arcc's reasoning, multi-step chains, or error recovery.
+
+## Prompt Tips
+
+arcc's response quality depends heavily on your prompt. Write it like you'd write a task for another engineer:
+
+| Instead of… | Write… | Why |
+|-------------|--------|-----|
+| `"check disk"` | `"check disk usage on /dev/sda1, show percentage used and available space"` | Be specific about target and output |
+| `"find large files"` | `"find files larger than 100MB under /home, sort by size descending, show top 10"` | Set thresholds and sorting |
+| `"git status"` | `"show all unpushed commits, their authors, and the files changed in each"` | Ask for the derivative insight |
+| `"check memory"` | `"check memory usage, show top 5 processes by RSS, highlight anything > 1GB"` | Ask for analysis, not just data |
+| `"find errors"` | `"scan /var/log/crash.log for ERROR and FATAL entries, count by hour, identify the most common error message"` | Specify pattern and aggregation |
+
+Key principles:
+- **Provide context** — file paths, directories, targets, conditions
+- **Specify output format** — "show top 5", "sort by size", "count by author"
+- **Ask for insight** — "identify root cause", "highlight anomalies", "suggest fixes"
+- **One goal per call** — stateless means you can't follow up, but don't stuff 3 unrelated tasks into one prompt either
+
+## Response Format (--json)
+
+arcc returns a structured JSON that includes both its AI-generated summary and the execution trace:
 
 ```json
 {
-  "response": "Disk usage: 120GB / 256GB (47%)",
+  "response": "Disk usage is 47% (120G/256G). The largest directory outside system folders is /home/user/projects (23G) followed by /home/user/.cache (8G).",
   "tool_calls": [
     {
       "command": "df -h / | tail -1",
       "status": "ok",
       "stdout": "/dev/sda1  256G  120G  136G  47% /",
+      "stderr": "",
+      "exit_code": 0,
+      "error": null
+    },
+    {
+      "command": "du -sh /home/user/* 2>/dev/null | sort -rh | head -5",
+      "status": "ok",
+      "stdout": "23G\t/home/user/projects\n8G\t/home/user/.cache\n...",
       "stderr": "",
       "exit_code": 0,
       "error": null
@@ -42,83 +124,74 @@ Every call with `--json` returns a single JSON object on stdout:
 }
 ```
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `response` | string | AI's natural-language summary |
-| `tool_calls[]` | array | Each shell command executed |
+| Field | Type | Meaning |
+|-------|------|---------|
+| `response` | string | arcc's AI-generated summary of findings (natural language) |
+| `tool_calls[]` | array | Each shell command arcc chose to execute (its reasoning trace) |
 | `tool_calls[].status` | string | `"ok"` / `"blocked"` / `"error"` |
-| `status` | string | `"ok"` / `"partial"` / `"error"` |
+| `tool_calls[].exit_code` | int | 0 = success, non-zero = failure |
+| `status` | string | `"ok"` (all succeeded) / `"partial"` / `"error"` |
 
-## Integration Examples
 
-### In CLAUDE.md / Agent Instructions
+## Response Rules
+
+After receiving the JSON result:
+
+1. **Always mention what was done** — reference `tool_calls[].command` so the user knows what ran
+2. **Summarize** the `response` field in your own words, don't just echo it
+3. **Show stdout** when it's the primary output (e.g. `df -h`, `git log`)
+4. **Hide stdout** when it's noise (e.g. `mkdir -p`, `mv` succeeded)
+5. **Surface errors** — if `tool_calls[].status` is `"error"` or `"blocked"`, tell the user
 
 ```markdown
-## Available Tools
+<!-- Good -->
+Disk usage: 120 GB / 256 GB (47%) on `/dev/sda1`.
 
-### arcc CLI
-
-You can execute shell commands via `arcc cli --json "description"`.
-Parse the JSON result to get the AI summary and command outputs.
-
-- Basic: `arcc cli --json "check disk usage"`
-- With unsafe flag: `arcc cli --json --unsafe "remove old files"`
-- Parsing: `arcc cli --json "..." | grep '"response"' | head -1`
+<!-- Bad — just echoing JSON -->
+The response says "Disk usage: 120GB / 256GB (47%)".
 ```
 
-### Calling from Shell (any agent)
+## Safety & Guardrails
 
-```bash
-# Get structured result
-result=$(arcc cli --json "find the largest files in /tmp")
-response=$(echo "$result" | grep -o '"response":"[^"]*"' | cut -d'"' -f4)
-```
+### --unsafe Rule
 
-### As an MCP Tool (Claude Code / Cursor / Windsurf)
+| Condition | Action |
+|-----------|--------|
+| Read-only commands (`ls`, `df`, `cat`, `grep`) | Never need `--unsafe` |
+| Mutating but safe (`mkdir`, `touch`, `cp`, `mv`) | Don't use `--unsafe` unless file is critical |
+| Destructive (`rm -rf`, `dd`, `mkfs`, `shutdown`, `kill -9`) | **Always ask user first**, then use `--unsafe` |
+| User explicitly said "delete", "remove", "clean up" | Safe to use `--unsafe` — but still mention it |
 
-`bin/arcc-mcp` implements the MCP stdio protocol, wrapping `arcc cli`.
-Register it in your agent's MCP configuration:
+⚠ **Never silently use `--unsafe`.** Always inform the user: "I'll use --unsafe to proceed."
 
-```json
-{
-  "mcpServers": {
-    "arcc": {
-      "type": "stdio",
-      "command": "/absolute/path/to/arcc/bin/arcc-mcp",
-      "args": []
-    }
-  }
-}
-```
+### Stateless Limitation
 
-Supported tools: `arcc` with parameters `prompt` (string, required) and
-`unsafe` (boolean, optional).
+arcc cli has **no memory** between calls. If a task requires multiple steps:
+ 1. Break it into independent calls
+ 2. Each call must contain all context needed
+ 3. Pass intermediate data via files or pipe: `arcc cli --json "step N"`
 
-## Parameter Reference
+## Error Recovery
 
-| Argument | Description |
-|----------|-------------|
-| `prompt` | Natural language task description (e.g. `"check disk usage"`) |
-| `--json` | Output a single JSON object instead of streaming tokens |
-| `--unsafe` | Skip safety allowlist — allows `rm`, `dd`, `mkfs`, `shutdown` |
-| `!command` | Run a raw shell command without LLM involvement |
+| Error | Cause | Action |
+|-------|-------|--------|
+| `"status": "blocked"` | Command matched deny-list | Retry with `--unsafe` after user approval |
+| `command not found` | arcc not on PATH | Suggest installing or provide absolute path |
+| `unrecognized option '--json'` | Outdated arcc | `arcc` version too old, suggest update |
+| `"status": "error"` with `exit_code != 0` | Command failed | Check stderr, fix parameters, retry |
+| `"status": "partial"` | Some commands succeeded, some failed | Report both, retry only failed ones |
 
 ## Typical Use Cases
 
-| Category | Example |
-|----------|---------|
-| System | `arcc cli --json "check memory and cpu usage"` |
-| Network | `arcc cli --json "find what's listening on port 80"` |
-| Docker | `arcc cli --json "list all running containers"` |
-| Git | `arcc cli --json "show unpushed commits"` |
-| Files | `arcc cli --json --unsafe "find and delete empty directories"` |
-| Logs | `cat app.log \| arcc cli --json "find error patterns"` |
-| Code | `arcc cli --json "generate a rust function to read toml files"` |
+| Category | Example Prompt |
+|----------|---------------|
+| System | `"check memory and cpu usage, show top 5 processes by memory"` |
+| Disk | `"find directories larger than 1GB in /home"` |
+| Network | `"show what's listening on port 80 and 443"` |
+| Docker | `"list all running containers and their resource usage"` |
+| Git | `"show commits since last tag, grouped by author"` |
+| Files | `"find all .tmp files older than 7 days and count their total size"` |
+| Logs | `"find the 10 most frequent error messages in /var/log/system.log"` |
+| Code | `"count lines of Rust code, excluding comments and blank lines, in src/"` |
 
-## Troubleshooting
-
-**`arcc: command not found`** — arcc is not installed or not on PATH.
-
-**`unrecognized option '--json'`** — Version too old. Update to v0.3.0+.
-
-**Commands blocked** — Add `--unsafe` to skip the safety allowlist.
+This exposes a single tool `arcc(prompt, unsafe?)` — same as calling `arcc cli --json`.
