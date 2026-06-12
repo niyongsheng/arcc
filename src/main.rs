@@ -50,21 +50,57 @@ fn init_tracing(mode: &str) {
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new(default_filter));
 
-    if mode == "tui" {
-        let log_path = std::env::var("ARCC_LOG")
-            .unwrap_or_else(|_| "/tmp/arcc-tui.log".into());
-        let file = std::fs::File::create(&log_path).expect("create log file");
-        tracing_subscriber::registry()
-            .with(filter)
-            .with(tracing_subscriber::fmt::layer().with_writer(file).with_ansi(false))
-            .init();
-        eprintln!("[arcc] logs → {log_path}");
-    } else {
-        tracing_subscriber::registry()
-            .with(filter)
-            .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
-            .init();
+    match mode {
+        "tui" => {
+            let log_path = std::env::var("ARCC_LOG")
+                .unwrap_or_else(|_| "/tmp/arcc-tui.log".into());
+            let file = std::fs::File::create(&log_path).expect("create log file");
+            tracing_subscriber::registry()
+                .with(filter)
+                .with(tracing_subscriber::fmt::layer().with_writer(file).with_ansi(false))
+                .init();
+            eprintln!("[arcc] logs → {log_path}");
+        }
+        "server" => {
+            // Server mode: write to both stderr and rolling file.
+            let log_dir = arcc_home_log_dir();
+            std::fs::create_dir_all(&log_dir).ok();
+            let file_appender = tracing_appender::rolling::daily(&log_dir, "server");
+            let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+            tracing_subscriber::registry()
+                .with(filter)
+                .with(
+                    tracing_subscriber::fmt::layer()
+                        .with_writer(std::io::stderr)
+                        .with_ansi(true),
+                )
+                .with(
+                    tracing_subscriber::fmt::layer()
+                        .with_writer(non_blocking)
+                        .with_ansi(false),
+                )
+                .init();
+            eprintln!("[arcc] logs → {log_dir}/server.{}.log (daily rotation)",
+                chrono::Local::now().format("%Y-%m-%d"));
+        }
+        _ => {
+            tracing_subscriber::registry()
+                .with(filter)
+                .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
+                .init();
+        }
     }
+}
+
+/// Determine the log directory under ARCC home (~/.arcc/logs/).
+fn arcc_home_log_dir() -> String {
+    let home = std::env::var("ARCC_HOME").unwrap_or_else(|_| {
+        let base = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .unwrap_or_else(|_| ".".into());
+        format!("{}/.arcc", base)
+    });
+    format!("{}/logs", home)
 }
 
 #[tokio::main]

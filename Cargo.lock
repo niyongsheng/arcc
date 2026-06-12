@@ -98,9 +98,11 @@ dependencies = [
  "arcc-server",
  "arcc-storage",
  "arcc-tui",
+ "chrono",
  "clap",
  "tokio",
  "tracing",
+ "tracing-appender",
  "tracing-subscriber",
 ]
 
