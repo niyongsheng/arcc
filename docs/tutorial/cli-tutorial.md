@@ -7,14 +7,26 @@ shell 命令，支持结构化返回JSON。
 # 自然语言 → shell 命令
 arcc cli "找出最大的 5 个文件"
 
-# 原始命令（！前缀，不走 LLM）
-arcc cli "!ls -la"
+# 原始命令（！前缀，不走 LLM；用单引号避免 zsh 历史扩展）
+arcc cli '!ls -la'
 
 # 管道输入分析
 cat error.log | arcc cli "统计 500 错误占比"
 
 # JSON 模式（给程序/AI 解析）
 arcc cli --json "检查网络状态"
+
+# JSON → jq 提取 AI 摘要
+arcc cli --json "磁盘使用情况" | jq -r '.response'
+
+# JSON → jq 提取执行命令和状态
+arcc cli --json "找出最大的 3 个进程" | jq '.tool_calls[] | {command, exit_code}'
+
+# JSON → jq 筛选脚本（仅 ok 状态）
+arcc cli --json --unsafe "清理 /tmp 缓存" | jq 'select(.status == "ok")'
+
+# JSON → 管道传给下一个命令
+arcc cli --json "检查 Docker 容器状态" | jq -r '.response' | arcc cli "优化建议"
 ```
 
 ## 作为子代理的优势

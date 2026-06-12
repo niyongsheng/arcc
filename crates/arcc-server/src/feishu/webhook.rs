@@ -54,8 +54,24 @@ pub struct WebhookResponse {
 /// POST /feishu/webhook
 pub async fn handler(
     State(ctx): State<SharedContext>,
-    Json(payload): Json<FeishuEvent>,
+    body: String,
 ) -> Json<WebhookResponse> {
+    // Log the raw incoming request body for debugging.
+    info!(raw_body = %body, "feishu webhook received");
+
+    // Deserialize the payload.
+    let payload: FeishuEvent = match serde_json::from_str(&body) {
+        Ok(p) => p,
+        Err(e) => {
+            warn!(err = %e, "failed to deserialize feishu webhook payload");
+            return Json(WebhookResponse {
+                code: 400,
+                challenge: None,
+                msg: Some(format!("invalid json: {e}")),
+            });
+        }
+    };
+
     // 1. URL verification (must work without token validation).
     if let Some(challenge) = payload.challenge {
         return Json(WebhookResponse {
@@ -70,7 +86,11 @@ pub async fn handler(
     if !expected_token.is_empty() {
         let actual = payload.token.as_deref().unwrap_or("");
         if actual != expected_token {
-            warn!("feishu webhook token mismatch");
+            warn!(
+                expected = %expected_token,
+                actual = %actual,
+                "feishu webhook token mismatch"
+            );
             return Json(WebhookResponse {
                 code: 403,
                 challenge: None,

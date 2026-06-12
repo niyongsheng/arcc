@@ -31,6 +31,7 @@ curl -fsSL https://raw.githubusercontent.com/niyongsheng/arcc/main/scripts/insta
 echo '[model]
 api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"' > ~/.arcc/config.toml
 ```
+See [config/config.toml](config/config.toml) for all available options.
 
 ## Architecture
 
