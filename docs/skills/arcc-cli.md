@@ -1,9 +1,12 @@
-# ARCC CLI Tool — AI Agent Integration
+# ARCC CLI — Stateless Shell Sub-Agent for AI
 
-`arcc cli` converts natural language into shell commands, executes them,
-and returns structured results. Any AI coding agent (Claude Code, Codex,
-Cursor, Windsurf, etc.) can invoke it via a simple shell call — no MCP
-server or special configuration required.
+`arcc cli` is a **stateless shell execution sub-agent**: it translates
+natural language into shell commands, executes them, and returns structured
+results — all in one shot, with no conversation history and no ability to
+ask the user questions. Designed for AI-to-AI calling.
+
+Any AI coding agent (Claude Code, Codex, Cursor, Windsurf, etc.) can invoke
+it via a simple shell call — no MCP server or special configuration required.
 
 ## Quick Reference
 
@@ -60,7 +63,7 @@ Parse the JSON result to get the AI summary and command outputs.
 
 - Basic: `arcc cli --json "check disk usage"`
 - With unsafe flag: `arcc cli --json --unsafe "remove old files"`
-- Parsing: `arcc cli --json "..." | jq .response`
+- Parsing: `arcc cli --json "..." | grep '"response"' | head -1`
 ```
 
 ### Calling from Shell (any agent)
@@ -68,7 +71,7 @@ Parse the JSON result to get the AI summary and command outputs.
 ```bash
 # Get structured result
 result=$(arcc cli --json "find the largest files in /tmp")
-response=$(echo "$result" | jq -r '.response')
+response=$(echo "$result" | grep -o '"response":"[^"]*"' | cut -d'"' -f4)
 ```
 
 ### As an MCP Tool (Claude Code / Cursor / Windsurf)

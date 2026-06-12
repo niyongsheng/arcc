@@ -129,7 +129,7 @@ pub async fn handler(
             let action: CardActionPayload = serde_json::from_value(
                 payload.event.get("action").cloned().unwrap_or_default(),
             )
-            .unwrap_or_else(|_| CardActionPayload {
+            .unwrap_or(CardActionPayload {
                 value: None,
                 tag: None,
                 message_id: None,
