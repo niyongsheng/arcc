@@ -58,3 +58,20 @@ pub struct MemoryFact {
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScheduledTask {
+    pub id: String,
+    pub chat_id: String,
+    pub chat_type: String,
+    pub open_id: String,
+    pub reply_id: String,
+    pub reply_id_type: String,
+    pub cron: Option<String>,
+    pub task_description: String,
+    pub status: String,
+    pub next_run_at: String,
+    pub last_run_at: Option<String>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+}

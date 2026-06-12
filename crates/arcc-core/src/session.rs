@@ -356,6 +356,29 @@ impl SessionManager {
         self.sessions.read().await.get(id).cloned()
     }
 
+    /// Find a session by its name (not ID).
+    ///
+    /// Iterates over all active sessions to find one whose `name` matches.
+    /// This is an O(n) lookup — use sparingly.
+    pub async fn find_by_name(&self, name: &str) -> Option<Arc<RwLock<Session>>> {
+        let map = self.sessions.read().await;
+        map.values().find(|s| {
+            s.try_read().ok().is_some_and(|guard| guard.name == name)
+        }).cloned()
+    }
+
+    /// Get an existing session by name, or create a new one if none exists.
+    ///
+    /// This enables continuous conversations keyed by a stable identifier
+    /// (e.g. feishu chat_id) instead of always starting fresh.
+    pub async fn get_or_create(&self, name: &str, mode: &str) -> Arc<RwLock<Session>> {
+        if let Some(session) = self.find_by_name(name).await {
+            debug!(%name, mode, "reusing existing session");
+            return session;
+        }
+        self.create(name, mode).await
+    }
+
     /// Remove a session by ID.
     pub async fn remove(&self, id: &str) {
         self.sessions.write().await.remove(id);

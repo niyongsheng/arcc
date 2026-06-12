@@ -5,7 +5,7 @@
 
 use rusqlite::{params, Connection, Result};
 
-use super::models::{InputHistoryEntry, MemoryFact, Message, Session, Summary};
+use super::models::{InputHistoryEntry, MemoryFact, Message, ScheduledTask, Session, Summary};
 
 /// Row returned by `token_usage_daily`.
 #[derive(Debug, Clone)]
@@ -260,4 +260,124 @@ pub fn clear_memories(conn: &Connection, user_id: &str) -> Result<usize> {
         params![user_id],
     )?;
     Ok(n)
+}
+
+// ── Scheduled tasks ──────────────────────────────────
+
+/// Insert a new scheduled task.
+pub fn create_scheduled_task(conn: &Connection, task: &ScheduledTask) -> Result<()> {
+    conn.execute(
+        "INSERT INTO scheduled_tasks (id, chat_id, chat_type, open_id, reply_id, reply_id_type,
+                                      cron, task_description, status, next_run_at,
+                                      created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, datetime('now'), datetime('now'))",
+        params![
+            task.id, task.chat_id, task.chat_type, task.open_id,
+            task.reply_id, task.reply_id_type, task.cron, task.task_description,
+            task.status, task.next_run_at,
+        ],
+    )?;
+    Ok(())
+}
+
+/// List all pending tasks whose `next_run_at` has passed, ordered by `next_run_at`.
+pub fn list_due_tasks(conn: &Connection) -> Result<Vec<ScheduledTask>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, chat_id, chat_type, open_id, reply_id, reply_id_type,
+                cron, task_description, status, next_run_at, last_run_at, created_at, updated_at
+         FROM scheduled_tasks
+         WHERE status = 'pending' AND next_run_at <= datetime('now')
+         ORDER BY next_run_at ASC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(ScheduledTask {
+            id: row.get(0)?,
+            chat_id: row.get(1)?,
+            chat_type: row.get(2)?,
+            open_id: row.get(3)?,
+            reply_id: row.get(4)?,
+            reply_id_type: row.get(5)?,
+            cron: row.get(6)?,
+            task_description: row.get(7)?,
+            status: row.get(8)?,
+            next_run_at: row.get(9)?,
+            last_run_at: row.get(10)?,
+            created_at: Some(row.get(11)?),
+            updated_at: Some(row.get(12)?),
+        })
+    })?;
+    rows.collect()
+}
+
+/// Update the status of a scheduled task.
+pub fn update_task_status(conn: &Connection, id: &str, status: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE scheduled_tasks SET status = ?2, updated_at = datetime('now') WHERE id = ?1",
+        params![id, status],
+    )?;
+    Ok(())
+}
+
+/// Update the next_run_at timestamp and mark as pending.
+pub fn update_task_next_run(conn: &Connection, id: &str, next_run_at: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE scheduled_tasks SET next_run_at = ?2, last_run_at = next_run_at,
+                                     status = 'pending', updated_at = datetime('now')
+         WHERE id = ?1",
+        params![id, next_run_at],
+    )?;
+    Ok(())
+}
+
+/// List all active scheduled tasks for a given chat_id, ordered by next run.
+pub fn list_tasks_by_user(conn: &Connection, chat_id: &str) -> Result<Vec<ScheduledTask>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, chat_id, chat_type, open_id, reply_id, reply_id_type,
+                cron, task_description, status, next_run_at, last_run_at, created_at, updated_at
+         FROM scheduled_tasks
+         WHERE chat_id = ?1 AND status IN ('pending', 'running')
+         ORDER BY next_run_at ASC",
+    )?;
+    let rows = stmt.query_map(params![chat_id], |row| {
+        Ok(ScheduledTask {
+            id: row.get(0)?,
+            chat_id: row.get(1)?,
+            chat_type: row.get(2)?,
+            open_id: row.get(3)?,
+            reply_id: row.get(4)?,
+            reply_id_type: row.get(5)?,
+            cron: row.get(6)?,
+            task_description: row.get(7)?,
+            status: row.get(8)?,
+            next_run_at: row.get(9)?,
+            last_run_at: row.get(10)?,
+            created_at: Some(row.get(11)?),
+            updated_at: Some(row.get(12)?),
+        })
+    })?;
+    rows.collect()
+}
+
+/// Delete a scheduled task by ID. Returns `true` if a row was deleted.
+pub fn delete_task(conn: &Connection, id: &str) -> Result<bool> {
+    let n = conn.execute("DELETE FROM scheduled_tasks WHERE id = ?1", params![id])?;
+    Ok(n > 0)
+}
+
+/// Mark a scheduled task as paused (scheduler will skip it).
+pub fn pause_task(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE scheduled_tasks SET status = 'paused', updated_at = datetime('now') WHERE id = ?1",
+        params![id],
+    )?;
+    Ok(())
+}
+
+/// Mark a paused task as pending (resume it).
+pub fn resume_task(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE scheduled_tasks SET status = 'pending', updated_at = datetime('now') WHERE id = ?1",
+        params![id],
+    )?;
+    Ok(())
 }

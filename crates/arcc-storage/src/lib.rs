@@ -8,7 +8,7 @@ use tracing::info;
 
 use crate::audit::types::AuditEvent;
 use crate::db::queries;
-use crate::db::models::{InputHistoryEntry, MemoryFact, Message, Session, Summary};
+use crate::db::models::{InputHistoryEntry, MemoryFact, Message, ScheduledTask, Session, Summary};
 
 /// Top-level initialisation: loads config, opens DB, runs migrations.
 ///
@@ -170,6 +170,56 @@ impl ArccStorage {
     pub fn clear_memories(&self, user_id: &str) -> Result<usize, StorageError> {
         let conn = self.db.lock().expect("db mutex poisoned");
         Ok(queries::clear_memories(&conn, user_id)?)
+    }
+
+    // ── Scheduled tasks ──────────────────────────────────
+
+    /// Create a new scheduled task.
+    pub fn create_scheduled_task(&self, task: &ScheduledTask) -> Result<(), StorageError> {
+        let conn = self.db.lock().expect("db mutex poisoned");
+        Ok(queries::create_scheduled_task(&conn, task)?)
+    }
+
+    /// List all pending tasks whose `next_run_at` has passed.
+    pub fn list_due_tasks(&self) -> Result<Vec<ScheduledTask>, StorageError> {
+        let conn = self.db.lock().expect("db mutex poisoned");
+        Ok(queries::list_due_tasks(&conn)?)
+    }
+
+    /// Update the status of a scheduled task.
+    pub fn update_task_status(&self, id: &str, status: &str) -> Result<(), StorageError> {
+        let conn = self.db.lock().expect("db mutex poisoned");
+        Ok(queries::update_task_status(&conn, id, status)?)
+    }
+
+    /// Update the next_run_at timestamp for a recurring task.
+    pub fn update_task_next_run(&self, id: &str, next_run_at: &str) -> Result<(), StorageError> {
+        let conn = self.db.lock().expect("db mutex poisoned");
+        Ok(queries::update_task_next_run(&conn, id, next_run_at)?)
+    }
+
+    /// List active scheduled tasks for a chat_id.
+    pub fn list_tasks_by_user(&self, chat_id: &str) -> Result<Vec<ScheduledTask>, StorageError> {
+        let conn = self.db.lock().expect("db mutex poisoned");
+        Ok(queries::list_tasks_by_user(&conn, chat_id)?)
+    }
+
+    /// Delete a scheduled task. Returns `true` if deleted.
+    pub fn delete_task(&self, id: &str) -> Result<bool, StorageError> {
+        let conn = self.db.lock().expect("db mutex poisoned");
+        Ok(queries::delete_task(&conn, id)?)
+    }
+
+    /// Pause a scheduled task (scheduler will skip it).
+    pub fn pause_task(&self, id: &str) -> Result<(), StorageError> {
+        let conn = self.db.lock().expect("db mutex poisoned");
+        Ok(queries::pause_task(&conn, id)?)
+    }
+
+    /// Resume a paused task.
+    pub fn resume_task(&self, id: &str) -> Result<(), StorageError> {
+        let conn = self.db.lock().expect("db mutex poisoned");
+        Ok(queries::resume_task(&conn, id)?)
     }
 
     /// Shortcut: init from the default home (`~/.arcc/`).

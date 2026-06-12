@@ -1,5 +1,6 @@
 pub mod feishu;
 pub mod routes;
+pub mod scheduler;
 
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
@@ -16,6 +17,11 @@ pub async fn run(ctx: SharedContext, daemon: bool) -> anyhow::Result<()> {
     )
     .parse()
     .expect("invalid server bind address");
+
+    // Spawn the background scheduler (only when feishu is configured).
+    if ctx.feishu_client.is_some() {
+        tokio::spawn(scheduler::scheduler_loop(ctx.clone()));
+    }
 
     let app = build_router(ctx);
 

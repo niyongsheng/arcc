@@ -29,6 +29,18 @@ pub fn run(conn: &Connection) -> Result<(), rusqlite::Error> {
         conn.pragma_update(None, "user_version", 4)?;
     }
 
+    if version < 5 {
+        info!("running migration v5: scheduled_tasks table");
+        conn.execute_batch(MIGRATION_V5)?;
+        conn.pragma_update(None, "user_version", 5)?;
+    }
+
+    if version < 6 {
+        info!("running migration v6: add paused status to scheduled_tasks");
+        conn.execute_batch(MIGRATION_V6)?;
+        conn.pragma_update(None, "user_version", 6)?;
+    }
+
     Ok(())
 }
 
@@ -105,4 +117,59 @@ CREATE TABLE IF NOT EXISTS memories (
 );
 
 CREATE INDEX IF NOT EXISTS idx_memories_user ON memories(user_id);
+"#;
+
+const MIGRATION_V5: &str = r#"
+CREATE TABLE IF NOT EXISTS scheduled_tasks (
+    id              TEXT PRIMARY KEY,
+    chat_id         TEXT NOT NULL,
+    chat_type       TEXT NOT NULL,
+    open_id         TEXT NOT NULL,
+    reply_id        TEXT NOT NULL,
+    reply_id_type   TEXT NOT NULL,
+    cron            TEXT,
+    task_description TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'pending'
+                    CHECK(status IN ('pending','running','completed','failed')),
+    next_run_at     TEXT NOT NULL,
+    last_run_at     TEXT,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_due
+    ON scheduled_tasks(status, next_run_at);
+"#;
+
+const MIGRATION_V6: &str = r#"
+-- Recreate scheduled_tasks with 'paused' status added to CHECK constraint.
+-- SQLite cannot ALTER CHECK, so we recreate the table.
+CREATE TABLE IF NOT EXISTS scheduled_tasks_v6 (
+    id              TEXT PRIMARY KEY,
+    chat_id         TEXT NOT NULL,
+    chat_type       TEXT NOT NULL,
+    open_id         TEXT NOT NULL,
+    reply_id        TEXT NOT NULL,
+    reply_id_type   TEXT NOT NULL,
+    cron            TEXT,
+    task_description TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'pending'
+                    CHECK(status IN ('pending','running','paused','completed','failed')),
+    next_run_at     TEXT NOT NULL,
+    last_run_at     TEXT,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+INSERT INTO scheduled_tasks_v6
+    SELECT id, chat_id, chat_type, open_id, reply_id, reply_id_type,
+           cron, task_description, status, next_run_at, last_run_at,
+           created_at, updated_at
+    FROM scheduled_tasks;
+
+DROP TABLE scheduled_tasks;
+ALTER TABLE scheduled_tasks_v6 RENAME TO scheduled_tasks;
+
+CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_due
+    ON scheduled_tasks(status, next_run_at);
 "#;

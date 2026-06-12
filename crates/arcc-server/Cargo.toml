@@ -16,6 +16,7 @@ tokio-stream.workspace = true
 futures.workspace = true
 uuid.workspace = true
 chrono.workspace = true
+cron.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 reqwest.workspace = true

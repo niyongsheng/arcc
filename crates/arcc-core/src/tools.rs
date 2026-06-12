@@ -52,6 +52,124 @@ pub fn command_tool_definition() -> ToolDefinition {
     }
 }
 
+/// Returns the `reply_to_user` tool definition for LLM function calling.
+///
+/// This tool allows the AI to proactively send messages to the user,
+/// useful for progress updates, confirmations, or notifying results of
+/// long-running / scheduled tasks.
+pub fn reply_to_user_definition() -> ToolDefinition {
+    ToolDefinition {
+        name: "reply_to_user".into(),
+        description: "Send a text message to the user. Use this to proactively \
+                      notify the user of progress, ask for confirmation, report \
+                      results of long-running tasks, or send follow-up messages \
+                      after a delay. The user will see this message immediately."
+            .into(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "message": {
+                    "type": "string",
+                    "description": "The message text to send to the user"
+                }
+            },
+            "required": ["message"]
+        }),
+        strict: false,
+    }
+}
+
+/// Returns the `schedule_task` tool definition for LLM function calling.
+///
+/// Allows the AI to schedule a task to run later or on a recurring schedule.
+/// The scheduler runs in the background and re-uses the full feishu processing
+/// flow (LLM + tool calls) when the task triggers.
+pub fn schedule_task_definition() -> ToolDefinition {
+    ToolDefinition {
+        name: "schedule_task".into(),
+        description: "Schedule a task to run later or on a recurring schedule. \
+                      Use this when the user asks you to do something at a \
+                      specific time or on a recurring basis (e.g. 'restart \
+                      nginx at 1am every day'). When the task triggers, the \
+                      full LLM processing flow runs again — the AI will re-read \
+                      the task description, plan the steps, and execute them. \
+                      The result is sent back to the user automatically."
+            .into(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "cron": {
+                    "type": "string",
+                    "description": "Cron expression in 6-field format (seconds prefix). \
+                                    Examples:\n\
+                                    - '0 1 * * * *'     = daily at 1am\n\
+                                    - '0 */5 * * * *'   = every 5 minutes\n\
+                                    - '0 0 * * * 0'     = weekly on Sunday midnight\n\
+                                    - '0 9-17 * * * 1-5' = every hour 9am-5pm weekdays\n\
+                                    - '*/30 * * * * *'  = every 30 seconds\n\
+                                    - '@daily'           = once daily at midnight\n\
+                                    Fields (first is seconds!): \
+                                    second minute hour day-of-month month day-of-week"
+                },
+                "task": {
+                    "type": "string",
+                    "description": "Natural language description of the task to \
+                                    execute when the cron triggers. Same format \
+                                    as if the user typed it directly."
+                }
+            },
+            "required": ["cron", "task"]
+        }),
+        strict: false,
+    }
+}
+
+/// Returns the `list_scheduled_tasks` tool definition.
+pub fn list_scheduled_tasks_definition() -> ToolDefinition {
+    ToolDefinition {
+        name: "list_scheduled_tasks".into(),
+        description: "List all active scheduled tasks for the current user. \
+                      Use this when the user asks what tasks are scheduled or \
+                      wants to manage their tasks."
+            .into(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {},
+            "required": []
+        }),
+        strict: false,
+    }
+}
+
+/// Returns the `cancel_scheduled_task` tool definition.
+pub fn cancel_scheduled_task_definition() -> ToolDefinition {
+    ToolDefinition {
+        name: "cancel_scheduled_task".into(),
+        description: "Pause or delete a scheduled task. Use this when the user \
+                      asks to cancel, stop, pause, or remove a scheduled task. \
+                      Pausing keeps the task in the database but prevents it \
+                      from running. Deleting removes it permanently."
+            .into(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "The ID of the task to cancel"
+                },
+                "action": {
+                    "type": "string",
+                    "enum": ["pause", "delete"],
+                    "description": "\"pause\" to temporarily stop the task, \
+                                    \"delete\" to remove it permanently"
+                }
+            },
+            "required": ["task_id", "action"]
+        }),
+        strict: false,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Command execution
 // ---------------------------------------------------------------------------
