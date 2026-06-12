@@ -94,10 +94,21 @@ impl FeishuClient {
         Ok(token)
     }
 
-    /// Send a message (text or interactive card) to a user via `open_id`.
+    /// Send a message to a user (`open_id`) — default receive_id_type.
     pub async fn send_message(
         &self,
-        open_id: &str,
+        receive_id: &str,
+        content: serde_json::Value,
+        msg_type: &str,
+    ) -> Result<(), FeishuError> {
+        self.send_message_to(receive_id, "open_id", content, msg_type).await
+    }
+
+    /// Send a message with explicit receive_id_type (`open_id` or `chat_id`).
+    pub async fn send_message_to(
+        &self,
+        receive_id: &str,
+        receive_id_type: &str,
         content: serde_json::Value,
         msg_type: &str,
     ) -> Result<(), FeishuError> {
@@ -107,11 +118,11 @@ impl FeishuClient {
         let resp = self
             .client
             .post(format!(
-                "{FEISHU_OPEN_API}/im/v1/messages?receive_id_type=open_id"
+                "{FEISHU_OPEN_API}/im/v1/messages?receive_id_type={receive_id_type}"
             ))
             .header("Authorization", format!("Bearer {token}"))
             .json(&json!({
-                "receive_id": open_id,
+                "receive_id": receive_id,
                 "msg_type": msg_type,
                 "content": content_str,
             }))

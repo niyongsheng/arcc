@@ -162,6 +162,7 @@ async fn handle_message_event(ctx: &SharedContext, event: &serde_json::Value) {
     let chat_id = message["chat_id"].as_str().unwrap_or("").to_owned();
     let message_id = message["message_id"].as_str().unwrap_or("").to_owned();
     let msg_type = message["message_type"].as_str().unwrap_or("");
+    let chat_type = event["message"]["chat_type"].as_str().unwrap_or("p2p").to_owned();
     let open_id = event["sender"]["sender_id"]["open_id"]
         .as_str()
         .unwrap_or("")
@@ -182,12 +183,12 @@ async fn handle_message_event(ctx: &SharedContext, event: &serde_json::Value) {
         return;
     }
 
-    info!(chat_id = %chat_id, len = user_text.len(), "feishu message received");
+    info!(chat_id = %chat_id, chat_type = %chat_type, len = user_text.len(), "feishu message received");
 
     // Spawn background task so the webhook returns 200 immediately.
     let ctx = ctx.clone();
     tokio::spawn(async move {
-        process_feishu_chat(&ctx, &chat_id, &open_id, &message_id, &user_text).await;
+        process_feishu_chat(&ctx, &chat_id, &chat_type, &open_id, &message_id, &user_text).await;
     });
 }
 
@@ -195,6 +196,7 @@ async fn handle_message_event(ctx: &SharedContext, event: &serde_json::Value) {
 async fn process_feishu_chat(
     ctx: &SharedContext,
     chat_id: &str,
+    chat_type: &str,
     open_id: &str,
     _message_id: &str,
     user_text: &str,
@@ -204,7 +206,7 @@ async fn process_feishu_chat(
         Some(p) => p.clone(),
         None => {
             warn!("no provider available for feishu chat");
-            send_fallback(ctx, open_id, "Service unavailable: no model provider").await;
+            send_fallback(ctx, chat_id, chat_type, open_id, "Service unavailable: no model provider").await;
             return;
         }
     };
@@ -275,7 +277,7 @@ async fn process_feishu_chat(
             Ok(r) => r,
             Err(e) => {
                 error!(err = %e, "LLM call failed for feishu message");
-                send_fallback(ctx, open_id, "Sorry, I encountered an error processing your message.").await;
+                send_fallback(ctx, chat_id, chat_type, open_id, "Sorry, I encountered an error processing your message.").await;
                 return;
             }
         };
@@ -364,8 +366,15 @@ async fn process_feishu_chat(
         }
     };
 
+    // Reply in the same chat where the message came from (group stays group).
+    let (reply_id, reply_id_type) = if chat_type == "group" {
+        (chat_id.to_owned(), "chat_id")
+    } else {
+        (open_id.to_owned(), "open_id")
+    };
+
     if let Err(e) = client
-        .send_message(open_id, json!({"text": reply_text}), "text")
+        .send_message_to(&reply_id, reply_id_type, json!({"text": reply_text}), "text")
         .await
     {
         error!(err = %e, "failed to send feishu reply");
@@ -384,13 +393,18 @@ async fn process_feishu_chat(
 }
 
 /// Send a fallback text message when normal processing fails.
-async fn send_fallback(ctx: &SharedContext, open_id: &str, text: &str) {
+async fn send_fallback(ctx: &SharedContext, chat_id: &str, chat_type: &str, open_id: &str, text: &str) {
     let client = match ctx.feishu_client.as_ref() {
         Some(c) => c,
         None => return,
     };
+    let (reply_id, reply_id_type) = if chat_type == "group" {
+        (chat_id.to_owned(), "chat_id")
+    } else {
+        (open_id.to_owned(), "open_id")
+    };
     let _ = client
-        .send_message(open_id, json!({"text": text}), "text")
+        .send_message_to(&reply_id, reply_id_type, json!({"text": text}), "text")
         .await;
 }
 

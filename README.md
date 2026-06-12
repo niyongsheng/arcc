@@ -17,7 +17,7 @@
 |------|---------|:----------:|:------:|:---------:|:---------------:|:-----------:|:------:|
 | [**TUI**](docs/tutorial/tui-tutorial.md) | `arcc tui` | ✅ | — | ✅ | ✅ | — | — |
 | [**CLI**](docs/tutorial/cli-tutorial.md) | `arcc cli "<prompt>"` | — | — | ✅ | — | ✅ | — |
-| [**Server**](docs/tutorial/server-tutorial.md) | `arcc server --daemon` | ✅ | ✅ | — | ✅ | — | ✅ |
+| [**Server**](docs/tutorial/server-tutorial.md) | `arcc server --daemon` | ✅ | ✅ | ✅ | ✅ | — | ✅ |
 
 ## Quick Start
 
