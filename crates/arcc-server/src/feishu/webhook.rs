@@ -27,20 +27,18 @@ use arcc_storage::db::models::ScheduledTask;
 
 use super::card;
 
-/// Build a Feishu `msg_type: "post"` body with markdown content, so the
-/// message is rendered as rich text (headings, code blocks, bold, tables,
-/// lists, etc.) instead of raw symbols.
+/// Build the content body for a Feishu `msg_type: "post"` message.
 ///
-/// Under the hood uses the `tag: md` construct which supports CommonMark/GFM.
+/// The `msg_type: "post"` already indicates this is a rich-text post, so the
+/// content JSON string has NO outer `"post"` wrapper — it starts with the
+/// language key (`zh_cn`) directly.  Uses `tag: md` for CommonMark/GFM.
 fn post_md(text: &str) -> serde_json::Value {
     json!({
-        "post": {
-            "zh_cn": {
-                "title": "ARCC",
-                "content": [[
-                    { "tag": "md", "content": text }
-                ]]
-            }
+        "zh_cn": {
+            "title": "ARCC",
+            "content": [[
+                { "tag": "md", "content": text }
+            ]]
         }
     })
 }
