@@ -8,8 +8,9 @@ ARCC (AI Rust Claude CLI) — 基于 Rust 2024 的终端常驻通用 AI Agent，
 
 ## Git 约定
 
-- **Commit messages**: Must be written in **English**. Use imperative mood, concise and descriptive (e.g. `Fix model fallback on rate limit`, `Add session export endpoint`).
+- **Push rule**: commit only by default; push only on explicit instruction.
 - **Branch naming**: `feature/`, `fix/`, `chore/` prefix followed by short kebab-case description.
+- **Commit messages**: Must be written in **English**. Use imperative mood, concise and descriptive (e.g. `Fix model fallback on rate limit`, `Add session export endpoint`).
 
 ## 主体技术选型
 

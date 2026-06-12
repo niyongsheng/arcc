@@ -23,17 +23,15 @@ use arcc_core::model::types::{ChatMessage, ChatRequest};
 
 use super::card;
 
-/// Raw Feishu event payload (simplified — only fields we need).
+/// Schema 2.0 event header (Feishu new format).
 #[derive(Debug, Deserialize)]
-pub struct FeishuEvent {
-    pub challenge: Option<String>,
+pub struct EventHeaderV2 {
     pub token: Option<String>,
-    #[serde(rename = "type")]
+    #[serde(rename = "event_type")]
     pub event_type: Option<String>,
-    pub event: Option<serde_json::Value>,
-    pub action: Option<CardActionPayload>,
 }
 
+/// Schema 1.0 card action payload.
 #[derive(Debug, Deserialize)]
 pub struct CardActionPayload {
     pub value: Option<serde_json::Value>,
@@ -51,6 +49,21 @@ pub struct WebhookResponse {
     pub msg: Option<String>,
 }
 
+/// Extract the token from either schema 1.0 (top-level) or 2.0 (header.token).
+fn extract_token(v: &serde_json::Value) -> Option<&str> {
+    v["header"]["token"].as_str().or_else(|| v["token"].as_str())
+}
+
+/// Extract the event type string from either schema.
+fn extract_event_type(v: &serde_json::Value) -> &str {
+    // Schema 2.0: header.event_type = "im.message.receive_v1"
+    if let Some(et) = v["header"]["event_type"].as_str() {
+        return et;
+    }
+    // Schema 1.0: type = "event_callback" or "card.action.trigger"
+    v["type"].as_str().unwrap_or("")
+}
+
 /// POST /feishu/webhook
 pub async fn handler(
     State(ctx): State<SharedContext>,
@@ -59,11 +72,11 @@ pub async fn handler(
     // Log the raw incoming request body for debugging.
     info!(raw_body = %body, "feishu webhook received");
 
-    // Deserialize the payload.
-    let payload: FeishuEvent = match serde_json::from_str(&body) {
-        Ok(p) => p,
+    // Parse as generic JSON for schema-agnostic processing.
+    let v: serde_json::Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
         Err(e) => {
-            warn!(err = %e, "failed to deserialize feishu webhook payload");
+            warn!(err = %e, "failed to parse feishu webhook payload");
             return Json(WebhookResponse {
                 code: 400,
                 challenge: None,
@@ -73,18 +86,18 @@ pub async fn handler(
     };
 
     // 1. URL verification (must work without token validation).
-    if let Some(challenge) = payload.challenge {
+    if v.get("challenge").and_then(|c| c.as_str()).is_some() {
         return Json(WebhookResponse {
             code: 0,
-            challenge: Some(challenge),
+            challenge: v["challenge"].as_str().map(|s| s.to_owned()),
             msg: None,
         });
     }
 
-    // 2. Token validation.
+    // 2. Token validation (supports both schema 1.0 and 2.0).
     let expected_token = &ctx.storage.config.feishu.verification_token;
     if !expected_token.is_empty() {
-        let actual = payload.token.as_deref().unwrap_or("");
+        let actual = extract_token(&v).unwrap_or("");
         if actual != expected_token {
             warn!(
                 expected = %expected_token,
@@ -100,15 +113,17 @@ pub async fn handler(
     }
 
     // 3. Dispatch by event type.
-    let event_type = payload.event_type.as_deref().unwrap_or("");
+    let event_type = extract_event_type(&v);
+    let is_v2 = v.get("schema").and_then(|s| s.as_str()) == Some("2.0");
 
     match event_type {
         "event_callback" => {
-            if let Some(ref event) = payload.event {
+            // Schema 1.0: event.type = "im.message.receive_v1"
+            if let Some(ref event) = v["event"].as_object() {
                 let kind = event["type"].as_str().unwrap_or("");
                 match kind {
                     "im.message.receive_v1" => {
-                        handle_message_event(&ctx, event).await;
+                        handle_message_event(&ctx, &v["event"]).await;
                     }
                     other => {
                         info!(event_type = %other, "unhandled feishu event type");
@@ -116,13 +131,21 @@ pub async fn handler(
                 }
             }
         }
+        "im.message.receive_v1" if is_v2 => {
+            // Schema 2.0: event message is directly in v["event"]
+            handle_message_event(&ctx, &v["event"]).await;
+        }
         "card.action.trigger" => {
-            if let Some(action) = payload.action {
+            if let Some(action) = serde_json::from_value::<CardActionPayload>(
+                serde_json::to_value(&v).unwrap_or_default(),
+            )
+            .ok()
+            {
                 handle_card_action(&ctx, &action).await;
             }
         }
         other => {
-            info!(event_type = %other, "unknown feishu webhook event type");
+            info!(event_type = %other, schema = if is_v2 { "2.0" } else { "1.0" }, "unknown feishu webhook event type");
         }
     }
 

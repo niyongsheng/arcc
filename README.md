@@ -21,13 +21,13 @@
 
 ## Quick Start
 
-需要你只需一个 DeepSeek API Key：
+You only need one [DeepSeek API Key](https://platform.deepseek.com)：
 
 ```bash
-# 安装
+# install
 curl -fsSL https://raw.githubusercontent.com/niyongsheng/arcc/main/scripts/install.sh | bash
 
-# 配置 API Key
+# API Key
 echo '[model]
 api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"' > ~/.arcc/config.toml
 ```
@@ -49,7 +49,7 @@ flowchart TB
         Model["ModelProvider<br/>DeepSeek-V4 Pro / Flash"]
         Safety["Safety Engine<br/>Allowlist + Risk Rating"]
         Session["Session Manager<br/>Context Compression"]
-        Tools["Tool Executor<br/>MCP / Shell"]
+        Tools["Tool Executor<br/>MCP / Skill"]
     end
 
     Model --> DeepSeekPro["DeepSeek-V4-Pro<br/>Complex Reasoning"]
@@ -68,4 +68,4 @@ flowchart TB
 
 ## License
 
-MIT
+[MIT](./LICENSE)
