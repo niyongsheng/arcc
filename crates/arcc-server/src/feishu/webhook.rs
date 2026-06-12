@@ -413,6 +413,12 @@ pub(crate) async fn process_feishu_chat(
         };
 
         // Persist assistant response.
+        // CRITICAL: In Phase 2 (has_tools=false), DSML recovery may produce
+        // tool_calls from the LLM's markdown output.  These are never executed
+        // (the loop breaks below).  Persisting them to the session corrupts the
+        // history — the next turn will get "tool_calls must be followed by tool
+        // messages" from the API.  Strip them when in Phase 2.
+        let tool_calls_for_session = if has_tools { msg.tool_calls.clone() } else { None };
         let asst_tokens = provider.count_tokens(display_content);
         {
             let mut s = session.write().await;
@@ -420,7 +426,7 @@ pub(crate) async fn process_feishu_chat(
                 ChatMessage {
                     role: "assistant".into(),
                     content: display_content.to_owned(),
-                    tool_calls: msg.tool_calls.clone(),
+                    tool_calls: tool_calls_for_session,
                     tool_call_id: None,
                     reasoning_content: msg.reasoning_content.clone(),
                 },
