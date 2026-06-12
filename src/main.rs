@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
+use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use arcc_core::context::AppContext;
@@ -39,7 +40,11 @@ enum Command {
     },
 }
 
-fn init_tracing(mode: &str) {
+/// Initialise tracing. Returns an optional `WorkerGuard` that must be
+/// kept alive for the program's lifetime when using non-blocking file
+/// appenders (server mode). Dropping the guard flushes and shuts down
+/// the log writer.
+fn init_tracing(mode: &str) -> Option<WorkerGuard> {
     // CLI mode: quieter logging — tool output goes to stdout via print!,
     // debug tracing from the model layer would only create noise.
     let default_filter = if mode == "cli" {
@@ -60,13 +65,14 @@ fn init_tracing(mode: &str) {
                 .with(tracing_subscriber::fmt::layer().with_writer(file).with_ansi(false))
                 .init();
             eprintln!("[arcc] logs → {log_path}");
+            None
         }
         "server" => {
             // Server mode: write to both stderr and rolling file.
             let log_dir = arcc_home_log_dir();
             std::fs::create_dir_all(&log_dir).ok();
             let file_appender = tracing_appender::rolling::daily(&log_dir, "server");
-            let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+            let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
             tracing_subscriber::registry()
                 .with(filter)
                 .with(
@@ -82,12 +88,14 @@ fn init_tracing(mode: &str) {
                 .init();
             eprintln!("[arcc] logs → {log_dir}/server.{}.log (daily rotation)",
                 chrono::Local::now().format("%Y-%m-%d"));
+            Some(guard)
         }
         _ => {
             tracing_subscriber::registry()
                 .with(filter)
                 .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
                 .init();
+            None
         }
     }
 }
@@ -112,7 +120,9 @@ async fn main() -> anyhow::Result<()> {
         Command::Server { .. } => "server",
     };
 
-    init_tracing(mode);
+    // Keep the WorkerGuard alive for the program's lifetime — dropping it
+    // shuts down the non-blocking file logger (server mode).
+    let _log_guard = init_tracing(mode);
 
     // ---- bootstrap storage ----
     let storage = arcc_storage::ArccStorage::init_default()?;
