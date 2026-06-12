@@ -223,6 +223,14 @@ impl App {
             }
             AppEvent::Input(ch) => {
                 for c in ch.chars() {
+                    // Skip control characters (C0: 0x00-0x1F and DEL: 0x7F)
+                    // that some terminals may send as Char events instead of
+                    // Backspace.  When not filtered, \x7f gets inserted as
+                    // visible garbage in the input buffer.
+                    // Note: c.is_control() also matches \x7f on most platforms.
+                    if c.is_control() {
+                        continue;
+                    }
                     self.insert_char(c);
                 }
                 self.tab_active = false;

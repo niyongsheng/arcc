@@ -163,7 +163,7 @@ pub async fn handler(
 
     match event_type {
         "im.message.receive_v1" => {
-            handle_message_event(&ctx, &payload.event).await;
+            handle_message_event(&ctx, &payload.event);
         }
         "card.action.trigger" => {
             let action: CardActionPayload = serde_json::from_value(
@@ -188,8 +188,24 @@ pub async fn handler(
     })
 }
 
+/// Check if the LLM's response text promises an action that should have
+/// been done via a tool call, but no tool was actually invoked.
+///
+/// This detects patterns where the AI says things like "已安排" or
+/// "已创建定时任务" without actually calling `schedule_task`.  These
+/// false promises are the most frequent user-facing issue in server mode.
+fn has_unfulfilled_promise(text: &str) -> bool {
+    // Explicit "I already did it" commitments (highest confidence).
+    let done_commitments = ["已安排", "已创建", "创建了定时", "我已经安排"];
+    // Future time guarantees that imply a scheduled action.
+    let specific_future = ["一分钟后", "两分钟后"];
+
+    done_commitments.iter().any(|w| text.contains(w))
+        || specific_future.iter().any(|w| text.contains(w))
+}
+
 /// Handle `im.message.receive_v1` — user sent a message to the bot.
-async fn handle_message_event(ctx: &SharedContext, event: &serde_json::Value) {
+fn handle_message_event(ctx: &SharedContext, event: &serde_json::Value) {
     let message = match event["message"].as_object() {
         Some(m) => m,
         None => {
@@ -293,14 +309,14 @@ pub(crate) async fn process_feishu_chat(
         );
     }
 
-    // 4. Build initial messages: system prompt + memory + current user text.
+    // 4. Build initial messages: system prompt + memory + conversation history + current user text.
     // Memory is keyed by open_id (individual user) even in group chats,
     // so each user's preferences and facts remain private.
     let system_msg = arcc_core::model::prompts::templates::server().to_chat_message();
     let memory_user_id = if chat_type == "group" { open_id } else { chat_id };
     let memory_context = ctx.memory.format_for_context(memory_user_id);
 
-    let mut messages = Vec::with_capacity(3);
+    let mut messages = Vec::new();
     messages.push(system_msg);
     if !memory_context.is_empty() {
         messages.push(ChatMessage {
@@ -311,6 +327,23 @@ pub(crate) async fn process_feishu_chat(
             reasoning_content: None,
         });
     }
+
+    // Load conversation history from session so the LLM has full context
+    // of previous turns. Without this, every user message is treated as
+    // a fresh conversation and the AI "forgets" what was discussed.
+    {
+        let s = session.read().await;
+        let history = s.context();
+        for msg in history {
+            // Skip plain system messages (already added above);
+            // but keep summary system messages from compression.
+            if msg.role == "system" && !msg.content.starts_with("[conversation summary]") {
+                continue;
+            }
+            messages.push(msg);
+        }
+    }
+
     messages.push(ChatMessage {
         role: "user".into(),
         content: user_text.to_owned(),
@@ -371,14 +404,22 @@ pub(crate) async fn process_feishu_chat(
 
         let msg = response.message;
 
+        // Ensure content is never empty when tool_calls are present —
+        // DeepSeek API requires non-empty content for assistant messages.
+        let display_content = if msg.content.trim().is_empty() && msg.tool_calls.is_some() {
+            "处理中…"
+        } else {
+            &msg.content
+        };
+
         // Persist assistant response.
-        let asst_tokens = provider.count_tokens(&msg.content);
+        let asst_tokens = provider.count_tokens(display_content);
         {
             let mut s = session.write().await;
             s.push_message(
                 ChatMessage {
                     role: "assistant".into(),
-                    content: msg.content.clone(),
+                    content: display_content.to_owned(),
                     tool_calls: msg.tool_calls.clone(),
                     tool_call_id: None,
                     reasoning_content: msg.reasoning_content.clone(),
@@ -390,6 +431,22 @@ pub(crate) async fn process_feishu_chat(
         // Phase 2 (no tools), or phase 1 with no tool_calls (LLM chose to
         // reply directly) — use content as final reply.
         if !has_tools || msg.tool_calls.as_ref().is_none_or(|c| c.is_empty()) {
+            // Phase 1: LLM returned text without calling any tools.
+            // Check if it made an unfulfilled promise (said it would
+            // schedule/restart/arrange something but didn't actually
+            // call the tool).
+            if has_tools && has_unfulfilled_promise(&msg.content) {
+                warn!("LLM promised action without tool call — forcing retry");
+                messages.push(ChatMessage {
+                    role: "user".into(),
+                    content: "你在回复中承诺了要执行操作，但你没有调用对应的工具来完成。\
+                        请立即调用对应的工具来实际执行，不要只文字承诺。".into(),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    reasoning_content: None,
+                });
+                continue;
+            }
             break msg.content;
         }
 
@@ -400,7 +457,7 @@ pub(crate) async fn process_feishu_chat(
         // message with 'tool_calls'".
         messages.push(ChatMessage {
             role: "assistant".into(),
-            content: msg.content.clone(),
+            content: display_content.to_owned(),
             tool_calls: msg.tool_calls.clone(),
             tool_call_id: None,
             reasoning_content: msg.reasoning_content.clone(),

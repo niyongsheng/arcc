@@ -55,7 +55,7 @@ pub async fn handler(
 
     // Inject known facts as a system message between system prompt and user message.
     let memory_context = ctx.memory.format_for_context(&input.session_id);
-    let mut messages = Vec::with_capacity(3);
+    let mut messages = Vec::new();
     messages.push(system_msg);
     if !memory_context.is_empty() {
         messages.push(ChatMessage {
@@ -66,6 +66,20 @@ pub async fn handler(
             reasoning_content: None,
         });
     }
+
+    // Load conversation history so the LLM has multi-turn context.
+    let session = ctx.sessions.get_or_create(&input.session_id, "server").await;
+    {
+        let s = session.read().await;
+        let history = s.context();
+        for msg in history {
+            if msg.role == "system" && !msg.content.starts_with("[conversation summary]") {
+                continue;
+            }
+            messages.push(msg);
+        }
+    }
+
     messages.push(ChatMessage {
         role: "user".into(),
         content: input.prompt.clone(),
@@ -96,7 +110,6 @@ pub async fn handler(
         Ok(stream) => {
             let (tx, rx) = tokio::sync::mpsc::channel(128);
 
-            let session = ctx.sessions.create(&input.session_id, "server").await;
             let user_msg_tokens = provider.count_tokens(&input.prompt);
 
             // Save user message.

@@ -65,11 +65,24 @@ pub fn spawn_input_handler(tx: mpsc::UnboundedSender<AppEvent>) -> tokio::task::
                         KeyCode::Down => {
                             let _ = tx.send(AppEvent::HistoryNext);
                         }
-                        KeyCode::Backspace => {
+                        KeyCode::Backspace | KeyCode::Delete => {
                             let _ = tx.send(AppEvent::Input("\x08".into()));
                         }
                         KeyCode::Esc => {
                             let _ = tx.send(AppEvent::Dismiss);
+                        }
+                        KeyCode::Char(ch) if ch.is_control() || ch == '\x7f' => {
+                            // Control characters reaching this branch means
+                            // crossterm didn't map them to their semantic key
+                            // (e.g. \x08 should be Backspace, \x7f should be
+                            // Backspace or Delete).  Some terminals emit these
+                            // as literal chars instead of as key codes.
+                            match ch {
+                                '\x08' | '\x7f' => {
+                                    let _ = tx.send(AppEvent::Input("\x08".into()));
+                                }
+                                _ => {} // discard other control chars
+                            }
                         }
                         KeyCode::Char(ch) => {
                             let _ = tx.send(AppEvent::Input(ch.to_string()));
