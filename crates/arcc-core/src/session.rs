@@ -235,6 +235,49 @@ impl Session {
         }
     }
 
+    /// Clear all in-memory messages and reset token count.
+    ///
+    /// Used by TUI `/clear` to reset the conversation without dropping
+    /// the session or its DB records.
+    pub fn clear_messages(&mut self) {
+        self.messages.clear();
+        self.token_count = 0;
+        self.summary = None;
+    }
+
+    /// Lazily enable DB persistence for a session that was created with
+    /// `db: None`.  Writes the session row to SQLite and retroactively
+    /// persists any messages already in the VecDeque.
+    ///
+    /// Used by TUI to defer DB writes until the first LLM content chunk
+    /// arrives, avoiding orphaned empty sessions.
+    pub fn enable_persistence(&mut self, db: Arc<Mutex<rusqlite::Connection>>) {
+        if self.db.is_some() {
+            return;
+        }
+        self.db = Some(db);
+        self.persist_new_session();
+
+        // Retroactively persist messages that were pushed before persistence
+        // was enabled.  Token counts are not available at this point, so we
+        // store NULL — they are still tracked in the in-memory counter.
+        if let Some(ref db_lock) = self.db && let Ok(conn) = db_lock.lock() {
+            if let Ok(mut stmt) = conn.prepare(
+                "INSERT INTO messages (session_id, role, content, token_count, created_at)
+                 VALUES (?1, ?2, ?3, NULL, datetime('now'))",
+            ) {
+                for msg in &self.messages {
+                    let _ = stmt.execute(rusqlite::params![self.id, msg.role, msg.content]);
+                }
+            }
+            // Bump session last-active timestamp.
+            let _ = conn.execute(
+                "UPDATE sessions SET last_active_at = datetime('now') WHERE id = ?1",
+                rusqlite::params![self.id],
+            );
+        }
+    }
+
     /// Prepare messages for an API request, sanitizing `reasoning_content` on
     /// assistant tool-call messages when `thinking_mode` is enabled.
     ///

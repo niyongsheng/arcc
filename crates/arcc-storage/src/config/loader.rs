@@ -14,6 +14,8 @@ pub struct ArccConfig {
     #[serde(default)]
     pub safety: SafetyConfig,
     #[serde(default)]
+    pub execution: ExecutionConfig,
+    #[serde(default)]
     pub storage: StorageConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
@@ -98,6 +100,24 @@ impl Default for SafetyConfig {
         }
     }
 }
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ExecutionConfig {
+    #[serde(default = "default_command_timeout")]
+    pub command_timeout_seconds: u64,
+    #[serde(default = "default_max_output_bytes")]
+    pub max_output_bytes: usize,
+}
+
+impl Default for ExecutionConfig {
+    fn default() -> Self {
+        Self {
+            command_timeout_seconds: default_command_timeout(),
+            max_output_bytes: default_max_output_bytes(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct StorageConfig {
     #[serde(default = "default_db_path")]
@@ -162,6 +182,12 @@ fn default_db_path() -> String {
 }
 fn default_config_watch_interval() -> u64 {
     5
+}
+fn default_command_timeout() -> u64 {
+    30
+}
+fn default_max_output_bytes() -> usize {
+    4096
 }
 fn default_log_level() -> String {
     "info".into()

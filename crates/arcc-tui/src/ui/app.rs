@@ -114,10 +114,17 @@ impl App {
         event_rx: mpsc::UnboundedReceiver<AppEvent>,
         ctx: SharedContext,
     ) -> Self {
-        // In-memory session — NOT persisted until first user input.
+        // In-memory session — persisted to SQLite lazily on first LLM response
+        // (see `enable_persistence` in `run_tool_calling_loop`).
         let context_max = ctx.storage.config.model.context_max_tokens;
         let session = Arc::new(RwLock::new(
-            arcc_core::session::Session::new("pending", "tui", "tui", context_max, None),
+            arcc_core::session::Session::new(
+                &uuid::Uuid::new_v4().to_string(),
+                "tui",
+                "tui",
+                context_max,
+                None,
+            ),
         ));
         // Load recent input history from DB (best-effort, oldest-first order).
         let loaded_history: Vec<String> = ctx.storage
@@ -458,7 +465,6 @@ impl App {
         if let Some(h) = self.init_handle.take() {
             h.abort();
         }
-        self.ensure_session();
         self.thinking_mode = true;
         self.messages.push(format!("🧑 /plan {task}"));
         self.status = components::status::PLANNING.into();
@@ -534,18 +540,6 @@ impl App {
         )));
     }
 
-    /// Ensure a real persisted session exists (lazy creation on first input).
-    fn ensure_session(&mut self) {
-        if self.session.try_read().ok().map(|s| s.id == "pending").unwrap_or(false) {
-            let persisted = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current()
-                    .block_on(self.ctx.sessions.create("tui", "tui"))
-            });
-            self.session = persisted;
-            info!("session persisted on first user input");
-        }
-    }
-
     /// Submit a prompt and handle the tool-calling stream loop.
     fn submit(&mut self, tx: mpsc::UnboundedSender<AppEvent>) {
         // Cancel any running /init generation — user started a new conversation.
@@ -589,8 +583,8 @@ impl App {
             return;
         }
 
-        // Persist session only now — proceeding will push messages.
-        self.ensure_session();
+        // Session persistence is deferred to `run_tool_calling_loop` —
+        // it calls `enable_persistence` on the first LLM response chunk.
 
         self.messages.push(format!("🧑 {prompt}"));
         self.status = components::status::THINKING.into();
@@ -710,21 +704,10 @@ impl App {
                 }
                 self.messages.clear();
                 self.reasoning_content.clear();
-                // Only create a new DB session if we had a real one before
-                let is_pending = self.session.try_read().ok().map(|s| s.id == "pending").unwrap_or(true);
-                if is_pending {
-                    // Reset to a fresh in-memory session
-                    let ctx = &self.ctx;
-                    let context_max = ctx.storage.config.model.context_max_tokens;
-                    self.session = Arc::new(RwLock::new(
-                        arcc_core::session::Session::new("pending", "tui", "tui", context_max, None),
-                    ));
-                } else {
-                    let new_session = tokio::task::block_in_place(|| {
-                        tokio::runtime::Handle::current()
-                            .block_on(self.ctx.sessions.create("tui", "tui"))
-                    });
-                    self.session = new_session;
+                // Clear session messages in memory — DB records (if any)
+                // are kept as historical audit log.
+                if let Ok(mut s) = self.session.try_write() {
+                    s.clear_messages();
                 }
             }
             "model" => {
@@ -779,10 +762,12 @@ impl App {
                 });
 
                 // Execute command.
+                let timeout_s = self.ctx.storage.config.execution.command_timeout_seconds;
+                let max_bytes = self.ctx.storage.config.execution.max_output_bytes;
                 let result = tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current().block_on(async {
                         let al = self.ctx.allowlist.read().await;
-                        tools::execute_command(&command, &al, true).await
+                        tools::execute_command_with_config(&command, &al, true, timeout_s, max_bytes).await
                     })
                 });
 
@@ -817,7 +802,7 @@ impl App {
                 self.messages.push(format!("🤖 History: {history_count} entries"));
                 self.messages.push(format!("🤖 Session: `{session_id}`"));
             }
-            "dashboard" | "data" => {
+            "dashboard" => {
                 self.show_dashboard = !self.show_dashboard;
                 if self.show_dashboard {
                     // Use cached data if still within TTL.
@@ -1255,6 +1240,7 @@ async fn run_tool_calling_loop(
             reasoning_effort: if config.request_thinking { Some("max".into()) } else { None },
         };
 
+        let mut persisted = false;
         let mut content_buf = String::new();
         let mut reasoning_buf = String::new();
         let mut tool_calls: Vec<ToolCall> = Vec::new();
@@ -1266,6 +1252,17 @@ async fn run_tool_calling_loop(
                 while let Some(chunk) = stream.next().await {
                     match chunk {
                         Ok(StreamChunk::Content(text)) => {
+                            // Persist session to SQLite on the very first
+                            // LLM content chunk — guarantees we never write
+                            // an empty session to the database.
+                            if !persisted {
+                                persisted = true;
+                                session
+                                    .write()
+                                    .await
+                                    .enable_persistence(ctx.storage.db.clone());
+                                info!("session persisted on first LLM response");
+                            }
                             content_buf.push_str(&text);
                             let _ = tx.send(AppEvent::Token(text));
                         }
@@ -1407,7 +1404,9 @@ async fn run_tool_calling_loop(
                 })
             } else {
                 let al = ctx.allowlist.read().await;
-                let r = tools::execute_command(&command, &al, true).await;
+                let timeout_s = ctx.storage.config.execution.command_timeout_seconds;
+                let max_bytes = ctx.storage.config.execution.max_output_bytes;
+                let r = tools::execute_command_with_config(&command, &al, true, timeout_s, max_bytes).await;
                 drop(al);
                 r
             };
@@ -1648,22 +1647,18 @@ pub async fn run(ctx: SharedContext) -> anyhow::Result<()> {
             match event {
                 AppEvent::Input(ch) if ch == "\n" || ch == "\r" => {
                     // If a tree block is focused and input is empty, cycle its view mode.
-                    if app.input_buffer.trim().is_empty() {
-                        if let Some(hash) = app.focused_tree {
-                            let mut reg = app.tree_registry.lock().unwrap();
-                            if let Some(entry) = reg.get_mut(&hash) {
-                                entry.mode = match entry.mode {
-                                    components::TreeViewMode::Collapsed => components::TreeViewMode::Expanded,
-                                    components::TreeViewMode::Expanded => components::TreeViewMode::Raw,
-                                    components::TreeViewMode::Raw => components::TreeViewMode::Collapsed,
-                                };
-                            }
-                            app.input_buffer.clear();
-                            app.character_index = 0;
-                            continue;
+                    if app.input_buffer.trim().is_empty() && let Some(hash) = app.focused_tree {
+                        let mut reg = app.tree_registry.lock().unwrap();
+                        if let Some(entry) = reg.get_mut(&hash) {
+                            entry.mode = match entry.mode {
+                                components::TreeViewMode::Collapsed => components::TreeViewMode::Expanded,
+                                components::TreeViewMode::Expanded => components::TreeViewMode::Raw,
+                                components::TreeViewMode::Raw => components::TreeViewMode::Collapsed,
+                            };
                         }
-                        // No tree focused — fall through to other handlers below
-                        // (pending_prompt, dashboard Enter, or normal submit).
+                        app.input_buffer.clear();
+                        app.character_index = 0;
+                        continue;
                     }
                     // Check for pending generic prompt.
                     if let Some(prompt) = app.pending_prompt.take() {

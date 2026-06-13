@@ -1,19 +1,27 @@
 //! Background scheduler — polls the `scheduled_tasks` table and triggers
-//! due tasks via the feishu processing flow.
+//! due tasks via the configured `TaskExecutor`.
 //!
-//! The scheduler is spawned on server start (only when feishu is configured)
-//! and runs for the lifetime of the process.
+//! The scheduler is spawned on server start and runs for the lifetime of
+//! the process.  It is backend-agnostic — task execution is delegated to a
+//! `TaskExecutor` implementation (Feishu, Slack, etc.).
 
+use std::collections::HashMap;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::time::interval;
 use tracing::{info, warn};
 
 use arcc_core::context::SharedContext;
+use arcc_core::task::executor::TaskExecutor;
 
 /// Interval between scheduler ticks (10 seconds).
 const SCHEDULER_TICK: Duration = Duration::from_secs(10);
+
+/// Maximum consecutive failures before a task is marked as `failed`
+/// instead of retrying forever.  Resets to 0 on success.
+const MAX_CONSECUTIVE_FAILURES: u32 = 10;
 
 /// Run the scheduler loop forever. Expected to be spawned as a background
 /// `tokio::spawn` task.
@@ -21,16 +29,18 @@ const SCHEDULER_TICK: Duration = Duration::from_secs(10);
 /// Every tick:
 /// 1. Query SQLite for pending tasks whose `next_run_at` has passed.
 /// 2. Mark each as `running`.
-/// 3. Call `process_feishu_chat` (from the webhook module) to execute the
-///    task — this reuses the full LLM + tool-calling loop.
+/// 3. Delegate execution to `executor.execute(&task)` — the implementation
+///    handles dispatching to the appropriate messaging backend.
 /// 4. After execution, update `next_run_at` for recurring tasks or mark
 ///    as `completed` for one-shot tasks.
-pub async fn scheduler_loop(ctx: SharedContext) {
+pub async fn scheduler_loop(ctx: SharedContext, executor: Arc<dyn TaskExecutor>) {
     info!("scheduler started (tick = {SCHEDULER_TICK:?})");
 
     let mut tick = interval(SCHEDULER_TICK);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut tick_count: u64 = 0;
+    // Track consecutive failures per task to avoid infinite retry loops.
+    let mut retry_count: HashMap<String, u32> = HashMap::new();
 
     loop {
         tick.tick().await;
@@ -67,20 +77,29 @@ pub async fn scheduler_loop(ctx: SharedContext) {
                 continue;
             }
 
-            // Reuse the full feishu processing flow.  The task_description
-            // is passed as the user's prompt — the LLM will re-read it,
-            // plan the steps, and execute commands as needed.
-            crate::feishu::webhook::process_feishu_chat(
-                &ctx,
-                &task.chat_id,
-                &task.chat_type,
-                &task.open_id,
-                "",     // no original message_id
-                &task.task_description,
-            )
-            .await;
+            // Delegate execution to the configured backend.
+            // The executor handles serialization per chat_id and returns
+            // success/failure so the scheduler can decide retry/completion.
+            let ok = executor.execute(&task).await;
 
-            // Update scheduling state.
+            if !ok {
+                // Execution failed — track retries.
+                let fails = retry_count.entry(task_id.clone()).or_insert(0);
+                *fails += 1;
+                if *fails >= MAX_CONSECUTIVE_FAILURES {
+                    warn!(task_id, retries = *fails, "scheduler: too many consecutive failures, marking failed");
+                    let _ = ctx.storage.update_task_status(&task_id, "failed");
+                    continue;
+                }
+                warn!(task_id, retries = *fails, "scheduler: task execution failed, will retry");
+                if let Err(e) = ctx.storage.update_task_status(&task_id, "pending") {
+                    warn!(task_id, err = %e, "scheduler: failed to reset task status");
+                }
+                continue;
+            }
+
+            // Execution succeeded — clear retry count.
+            retry_count.remove(&task_id);
             if let Some(cron) = &task.cron {
                 // Recurring: compute next run, reset to pending.
                 match cron::Schedule::from_str(cron) {

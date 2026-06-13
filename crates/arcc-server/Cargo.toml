@@ -20,5 +20,6 @@ cron.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 reqwest.workspace = true
+async-trait.workspace = true
 arcc-core.workspace = true
 arcc-storage.workspace = true

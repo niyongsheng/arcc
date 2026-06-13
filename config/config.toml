@@ -45,6 +45,12 @@ webhook_path = "/feishu/webhook"
 # 不在列表中的命令可以直接执行，无需用户确认
 require_human_confirm = ["rm", "mv", "dd", "mkfs", "shutdown", "reboot", "fdisk"]
 
+[execution]
+# 命令执行超时时间（秒），超时后自动 kill
+command_timeout_seconds = 30
+# 命令输出最大字节数，超出的部分被截断
+max_output_bytes = 4096
+
 [storage]
 # SQLite 数据库路径（相对于 ~/.arcc/）
 db_path = "arcc.db"

@@ -9,11 +9,10 @@ use tokio::time::timeout;
 use crate::model::types::ToolDefinition;
 use crate::safety::allowlist::Allowlist;
 
-/// Maximum output bytes captured from any single command execution.
-const MAX_OUTPUT_BYTES: usize = 4096;
-
-/// Maximum wall-clock time for a command before it is killed.
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+/// Default timeout (30s) and max output (4096 bytes) — used when no
+/// caller-supplied values are available (e.g. direct API consumers).
+const DEFAULT_TIMEOUT_SECS: u64 = 30;
+const DEFAULT_MAX_BYTES: usize = 4096;
 
 // ---------------------------------------------------------------------------
 // Tool definitions
@@ -84,15 +83,24 @@ pub fn reply_to_user_definition() -> ToolDefinition {
 /// Allows the AI to schedule a task to run later or on a recurring schedule.
 /// The scheduler runs in the background and re-uses the full feishu processing
 /// flow (LLM + tool calls) when the task triggers.
+///
+/// IMPORTANT: For **one-shot** tasks (e.g. "remind me in 5 minutes", "notify
+/// me at 2pm"), the AI MUST call `get_current_time` first to know the server's
+/// local time, then compute the delay in seconds and pass it as `delay_seconds`.
+/// Do NOT try to compute a cron expression for one-shot tasks.
 pub fn schedule_task_definition() -> ToolDefinition {
     ToolDefinition {
         name: "schedule_task".into(),
         description: "Schedule a task to run later or on a recurring schedule. \
                       Use this when the user asks you to do something at a \
                       specific time or on a recurring basis (e.g. 'restart \
-                      nginx at 1am every day'). For one-shot tasks (e.g. \
-                      'remind me in 5 minutes'), omit the cron field and \
-                      describe the timing in the task description instead. \
+                      nginx at 1am every day'). \n\n\
+                      BEFORE calling this tool, call `get_current_time` first \
+                      to know the current server time. Then: \n\
+                      - For **one-shot** tasks (e.g. 'remind me in 5 minutes', \
+                      'notify me at 2pm'): compute `delay_seconds` relative to now. \n\
+                      - For **recurring** tasks (e.g. 'every day at 1am'): \
+                      set `cron` to a cron expression. \n\n\
                       When the task triggers, the full LLM processing flow \
                       runs again — the AI will re-read the task description, \
                       plan the steps, and execute them. The result is sent \
@@ -103,17 +111,26 @@ pub fn schedule_task_definition() -> ToolDefinition {
             "properties": {
                 "cron": {
                     "type": "string",
-                    "description": "Cron expression in 6-field format (seconds prefix). \
-                                    Optional — omit for one-shot tasks.\n\
-                                    Examples:\n\
-                                    - '0 1 * * * *'     = daily at 1am\n\
-                                    - '0 */5 * * * *'   = every 5 minutes\n\
-                                    - '0 0 * * * 0'     = weekly on Sunday midnight\n\
-                                    - '0 9-17 * * * 1-5' = every hour 9am-5pm weekdays\n\
-                                    - '*/30 * * * * *'  = every 30 seconds\n\
-                                    - '@daily'           = once daily at midnight\n\
-                                    Fields (first is seconds!): \
-                                    second minute hour day-of-month month day-of-week"
+                    "description": "Cron expression in 6-field format (year optional). \
+                                    Use for RECURRING tasks only. Omit for one-shot. \
+                                    \nExamples:\n\
+                                    - '0 0 1 * * *'       = daily at 1am\n\
+                                    - '0 */5 * * * *'     = every 5 minutes\n\
+                                    - '0 0 9-17 * * 1-5'  = every hour 9am-5pm weekdays\n\
+                                    - '0 0 0 * * 0'       = weekly on Sunday midnight\n\
+                                    Fields order: \
+                                    second minute hour day-of-month month day-of-week [year]"
+                },
+                "delay_seconds": {
+                    "type": "integer",
+                    "description": "For one-shot tasks only. Number of seconds from \
+                                    now to fire the task. Compute this AFTER calling \
+                                    `get_current_time`. E.g. 'in 5 minutes' = 300, \
+                                    'in 2 hours' = 7200, 'next Friday' = ~518400. \
+                                    If the user specifies a date without a time \
+                                    (e.g. 'June 18th'), ASK them what time they \
+                                    want before scheduling. \
+                                    Mutually exclusive with cron."
                 },
                 "task": {
                     "type": "string",
@@ -123,6 +140,24 @@ pub fn schedule_task_definition() -> ToolDefinition {
                 }
             },
             "required": ["task"]
+        }),
+        strict: false,
+    }
+}
+
+/// Returns the `get_current_time` tool definition.
+pub fn get_current_time_definition() -> ToolDefinition {
+    ToolDefinition {
+        name: "get_current_time".into(),
+        description: "Get the current server local time. Call this BEFORE \
+                      `schedule_task` so you can compute delays for one-shot \
+                      tasks or know the time context for recurring schedules. \
+                      Returns the current date and time in the server's timezone."
+            .into(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {},
+            "required": []
         }),
         strict: false,
     }
@@ -219,8 +254,8 @@ pub struct CommandOutput {
 /// Execute a command via piped stdio (default, no TTY).
 ///
 /// 1. Check for dangerous commands (`require_human_confirm` list).
-/// 2. Run with a 30-second timeout via `tokio::process::Command`.
-/// 3. Truncate output at `MAX_OUTPUT_BYTES`.
+/// 2. Run with a configurable timeout via `tokio::process::Command`.
+/// 3. Truncate output at `max_bytes`.
 ///
 /// All commands are allowed unless they match a dangerous pattern and the
 /// caller has not opted out of permission checks.  The interactive TUI
@@ -230,6 +265,19 @@ pub async fn execute_command(
     cmd: &str,
     allowlist: &Allowlist,
     skip_permissions: bool,
+) -> Result<CommandOutput, ToolError> {
+    self::execute_command_with_config(cmd, allowlist, skip_permissions, DEFAULT_TIMEOUT_SECS, DEFAULT_MAX_BYTES).await
+}
+
+/// Like `execute_command` but with explicit timeout and output limits.
+/// This is the real implementation; `execute_command` delegates here
+/// with defaults for backward compatibility.
+pub async fn execute_command_with_config(
+    cmd: &str,
+    allowlist: &Allowlist,
+    skip_permissions: bool,
+    timeout_secs: u64,
+    max_bytes: usize,
 ) -> Result<CommandOutput, ToolError> {
     // --- safety check ---
     if !skip_permissions && allowlist.check(cmd).unwrap_or(false) {
@@ -250,9 +298,10 @@ pub async fn execute_command(
         .map_err(|e| ToolError::Spawn(e.to_string()))?;
 
     // --- wait with timeout ---
-    let output = timeout(COMMAND_TIMEOUT, child.wait_with_output())
+    let cmd_timeout = Duration::from_secs(timeout_secs);
+    let output = timeout(cmd_timeout, child.wait_with_output())
         .await
-        .map_err(|_| ToolError::Timeout(COMMAND_TIMEOUT.as_secs()))?
+        .map_err(|_| ToolError::Timeout(timeout_secs))?
         .map_err(|e| ToolError::Spawn(e.to_string()))?;
 
     // --- capture and truncate ---
@@ -260,14 +309,14 @@ pub async fn execute_command(
     let mut stderr_str = String::from_utf8_lossy(&output.stderr).to_string();
     let mut truncated = false;
 
-    if stdout_str.len() > MAX_OUTPUT_BYTES {
-        let boundary = stdout_str.floor_char_boundary(MAX_OUTPUT_BYTES);
+    if stdout_str.len() > max_bytes {
+        let boundary = stdout_str.floor_char_boundary(max_bytes);
         stdout_str.truncate(boundary);
         stdout_str.push_str("\n... (truncated)");
         truncated = true;
     }
-    if stderr_str.len() > MAX_OUTPUT_BYTES {
-        let boundary = stderr_str.floor_char_boundary(MAX_OUTPUT_BYTES);
+    if stderr_str.len() > max_bytes {
+        let boundary = stderr_str.floor_char_boundary(max_bytes);
         stderr_str.truncate(boundary);
         stderr_str.push_str("\n... (truncated)");
         truncated = true;

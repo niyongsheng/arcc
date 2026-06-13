@@ -19,13 +19,312 @@ use serde_json::json;
 use tracing::{error, info, warn};
 
 use std::str::FromStr;
+use std::sync::OnceLock;
 
 use arcc_core::context::SharedContext;
 use arcc_core::model::types::{ChatMessage, ChatRequest};
 use arcc_core::tools;
 use arcc_storage::db::models::ScheduledTask;
 
+use arcc_core::feishu_client::FeishuClient;
+
 use super::card;
+use super::chat_queue::{ChatEvent, ChatQueue};
+
+/// Singleton queue that serializes processing per chat_id.
+fn chat_queue() -> &'static ChatQueue {
+    static Q: OnceLock<ChatQueue> = OnceLock::new();
+    Q.get_or_init(ChatQueue::new)
+}
+
+// ---------------------------------------------------------------------------
+// Session history sanitization
+// ---------------------------------------------------------------------------
+
+/// Filter a list of ChatMessages so that tool messages are only kept when
+/// they are preceded by an assistant message with matching `tool_calls`.
+///
+/// DeepSeek API requires:
+/// 1. Every assistant message carrying `tool_calls` must be immediately
+///    followed by tool messages whose `tool_call_id` values match the
+///    preceding tool calls.
+/// 2. The NUMBER of tool messages must match the NUMBER of tool_calls
+///    in the preceding assistant (no gaps, no orphans).
+///
+/// Orphan tool messages or mismatched counts cause HTTP 400.
+fn sanitize_history(history: &mut Vec<ChatMessage>) {
+    // Remove leading tool messages (orphans at the start).
+    while history.first().is_some_and(|m| m.role == "tool") {
+        history.remove(0);
+    }
+    let mut i = 0;
+    while i < history.len() {
+        if history[i].role != "assistant" {
+            i += 1;
+            continue;
+        }
+        let Some(tool_calls) = history[i].tool_calls.as_ref()
+            .filter(|c| !c.is_empty())
+        else {
+            i += 1;
+            continue;
+        };
+        let expected_count = tool_calls.len();
+
+        // Count how many consecutive tool messages follow this assistant.
+        let mut tool_count = 0;
+        while i + 1 + tool_count < history.len()
+            && history[i + 1 + tool_count].role == "tool"
+        {
+            tool_count += 1;
+        }
+
+        if tool_count >= expected_count {
+            // Enough tool messages — skip past the assistant + its tools.
+            i += 1 + tool_count;
+            continue;
+        }
+
+        // Not enough tool messages — strip tool_calls from this assistant
+        // so it becomes a plain text message.  Also remove any orphan tools.
+        history[i].tool_calls = None;
+        for _ in 0..tool_count {
+            history.remove(i + 1);
+        }
+        i += 1;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tool handler functions — extracted from the tool-calling loop
+// ---------------------------------------------------------------------------
+
+async fn handle_reply_to_user(
+    tc: &arcc_core::model::types::ToolCall,
+    client: &FeishuClient,
+    chat_type: &str,
+    open_id: &str,
+    reply_id: &str,
+    reply_id_type: &str,
+) -> (bool, String) {
+    let message = tc.arguments["message"].as_str().unwrap_or("");
+    let msg_with_mention = maybe_mention(message, chat_type, open_id);
+    match client
+        .send_message_to(reply_id, reply_id_type, post_md(&msg_with_mention), "post")
+        .await
+    {
+        Ok(()) => {
+            info!("reply_to_user: message sent to user");
+            (true, "Message sent to user successfully.".into())
+        }
+        Err(e) => {
+            warn!(err = %e, "reply_to_user failed");
+            (false, format!("Failed to send message: {e}"))
+        }
+    }
+}
+
+fn handle_get_current_time() -> (bool, String) {
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    info!("get_current_time: {now}");
+    (true, format!("Current server time: {now}"))
+}
+
+async fn handle_schedule_task(
+    ctx: &SharedContext,
+    tc: &arcc_core::model::types::ToolCall,
+    chat_id: &str,
+    chat_type: &str,
+    open_id: &str,
+    reply_id: &str,
+    reply_id_type: &str,
+) -> (bool, String) {
+    let cron_raw = tc.arguments.get("cron").and_then(|v| v.as_str());
+    let cron = cron_raw.filter(|s| !s.is_empty());
+    if cron_raw.is_some() && cron.is_none() {
+        warn!("LLM sent empty cron string, treating as one-shot");
+    }
+    let delay = tc.arguments.get("delay_seconds").and_then(|v| v.as_i64());
+    let task = tc.arguments["task"].as_str().unwrap_or("");
+
+    let (task_cron, next_run_str) =
+        if let Some(delay_secs) = delay {
+            let fire_at = chrono::Local::now()
+                .checked_add_signed(chrono::Duration::seconds(delay_secs))
+                .expect("valid duration");
+            let formatted = fire_at.format("%Y-%m-%d %H:%M:%S").to_string();
+            (None, formatted)
+        } else if let Some(cron_expr) = cron {
+            let schedule = match cron::Schedule::from_str(cron_expr) {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!(cron_expr, err = %e, "invalid cron expression");
+                    return (false, format!("Invalid cron expression '{cron_expr}': {e}"));
+                }
+            };
+            let local = match schedule.upcoming(chrono::Local).next() {
+                Some(t) => t,
+                None => {
+                    warn!(cron_expr, "cron expression never repeats");
+                    return (false, "Cron expression never repeats (no future occurrence).".into());
+                }
+            };
+            let formatted = local.format("%Y-%m-%d %H:%M:%S").to_string();
+            (Some(cron_expr.to_owned()), formatted)
+        } else {
+            let formatted = chrono::Local::now()
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string();
+            (None, formatted)
+        };
+
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let scheduled = ScheduledTask {
+        id: task_id.clone(),
+        chat_id: chat_id.to_owned(),
+        chat_type: chat_type.to_owned(),
+        open_id: open_id.to_owned(),
+        reply_id: reply_id.to_owned(),
+        reply_id_type: reply_id_type.to_string(),
+        cron: task_cron.clone(),
+        task_description: task.to_owned(),
+        status: "pending".into(),
+        next_run_at: next_run_str.clone(),
+        last_run_at: None,
+        created_at: None,
+        updated_at: None,
+    };
+
+    let client = match ctx.feishu_client.as_ref() {
+        Some(c) => c,
+        None => return (false, "Feishu client not available".into()),
+    };
+
+    match ctx.storage.create_scheduled_task(&scheduled) {
+        Ok(()) => {
+            info!(task_id, next_run = %next_run_str, "task scheduled");
+            let cron_display = match &task_cron {
+                Some(c) => format!("`{c}`"),
+                None => "one-shot".into(),
+            };
+            let safe_task = task.replace('>', "\\>").replace('\n', " ").replace('\r', "");
+            let confirm = format!(
+                "✅ Task scheduled!\n> {}\nCron: {}\nNext run: {}",
+                safe_task, cron_display, next_run_str,
+            );
+            let confirm_with_mention = maybe_mention(&confirm, chat_type, open_id);
+            let _ = client
+                .send_message_to(reply_id, reply_id_type, post_md(&confirm_with_mention), "post")
+                .await;
+            (true, format!("Task scheduled successfully. Next run at: {next_run_str}"))
+        }
+        Err(e) => {
+            warn!(task_id, err = %e, "failed to persist scheduled task");
+            (false, format!("Failed to save task: {e}"))
+        }
+    }
+}
+
+async fn handle_list_tasks(
+    ctx: &SharedContext,
+    _tc: &arcc_core::model::types::ToolCall,
+    chat_id: &str,
+) -> (bool, String) {
+    match ctx.storage.list_tasks_by_user(chat_id) {
+        Ok(tasks) => {
+            if tasks.is_empty() {
+                (true, "You have no active scheduled tasks.".into())
+            } else {
+                let mut lines = String::from("Your scheduled tasks:\n\n");
+                for task in &tasks {
+                    lines.push_str(&format!(
+                        "- `{}`: {} (cron: {}, next: {}) [{}]\n",
+                        task.id, task.task_description,
+                        task.cron.as_deref().unwrap_or("one-shot"),
+                        task.next_run_at, task.status,
+                    ));
+                }
+                (true, lines)
+            }
+        }
+        Err(e) => {
+            warn!(err = %e, "list_scheduled_tasks failed");
+            (false, format!("Failed to list tasks: {e}"))
+        }
+    }
+}
+
+fn handle_use_pro_model(
+    _tc: &arcc_core::model::types::ToolCall,
+    pro_provider: Option<&std::sync::Arc<dyn arcc_core::model::provider::ModelProvider>>,
+    provider: &mut std::sync::Arc<dyn arcc_core::model::provider::ModelProvider>,
+) -> (bool, String) {
+    if let Some(pro) = pro_provider {
+        *provider = pro.clone();
+        info!("switched to Pro model for complex task");
+        (true, "Switched to Pro model. I now have more reasoning capacity to handle this task.".into())
+    } else {
+        (false, "Pro model is not available.".into())
+    }
+}
+
+async fn handle_cancel_task(
+    ctx: &SharedContext,
+    tc: &arcc_core::model::types::ToolCall,
+) -> (bool, String) {
+    let task_id = tc.arguments["task_id"].as_str().unwrap_or("");
+    let action = tc.arguments["action"].as_str().unwrap_or("delete");
+
+    if action == "pause" {
+        match ctx.storage.pause_task(task_id) {
+            Ok(()) => {
+                info!(task_id, "task paused");
+                (true, format!("Task {task_id} has been paused."))
+            }
+            Err(e) => {
+                warn!(task_id, err = %e, "pause_task failed");
+                (false, format!("Failed to pause task: {e}"))
+            }
+        }
+    } else {
+        match ctx.storage.delete_task(task_id) {
+            Ok(true) => {
+                info!(task_id, "task deleted");
+                (true, format!("Task {task_id} has been deleted."))
+            }
+            Ok(false) => (false, format!("Task {task_id} not found.")),
+            Err(e) => {
+                warn!(task_id, err = %e, "delete_task failed");
+                (false, format!("Failed to delete task: {e}"))
+            }
+        }
+    }
+}
+
+async fn handle_execute_command(
+    ctx: &SharedContext,
+    tc: &arcc_core::model::types::ToolCall,
+) -> (bool, String) {
+    let command = tc.arguments["command"].as_str().unwrap_or("").to_owned();
+    let al = ctx.allowlist.read().await;
+
+    match tools::execute_command_with_config(
+        &command, &al, true,
+        ctx.storage.config.execution.command_timeout_seconds,
+        ctx.storage.config.execution.max_output_bytes,
+    ).await {
+        Ok(output) => {
+            let content = if output.stderr.is_empty() {
+                output.stdout
+            } else {
+                format!("exit_code: {:?}\nstdout:\n{}\nstderr:\n{}",
+                    output.exit_code, output.stdout, output.stderr)
+            };
+            (true, content)
+        }
+        Err(e) => (false, e.to_string()),
+    }
+}
 
 /// Build the content body for a Feishu `msg_type: "post"` message.
 ///
@@ -60,19 +359,6 @@ fn maybe_mention(text: &str, chat_type: &str, open_id: &str) -> String {
         format!("<at id=\"{open_id}\"></at> {text}")
     } else {
         text.to_owned()
-    }
-}
-
-/// Build a tool-role ChatMessage for an error result.
-/// Reduces duplication in the tool-calling loop where multiple branches
-/// construct identical tool-message structures.
-fn tool_error_msg(tool_call_id: &str, content: String) -> ChatMessage {
-    ChatMessage {
-        role: "tool".into(),
-        content,
-        tool_calls: None,
-        tool_call_id: Some(tool_call_id.to_owned()),
-        reasoning_content: None,
     }
 }
 
@@ -176,7 +462,7 @@ pub async fn handler(
 
     match event_type {
         "im.message.receive_v1" => {
-            handle_message_event(&ctx, &payload.event);
+            handle_message_event(&ctx, &payload.event).await;
         }
         "card.action.trigger" => {
             let action: CardActionPayload = serde_json::from_value(
@@ -203,7 +489,7 @@ pub async fn handler(
 
 
 /// Handle `im.message.receive_v1` — user sent a message to the bot.
-fn handle_message_event(ctx: &SharedContext, event: &serde_json::Value) {
+async fn handle_message_event(ctx: &SharedContext, event: &serde_json::Value) {
     let message = match event["message"].as_object() {
         Some(m) => m,
         None => {
@@ -258,14 +544,24 @@ fn handle_message_event(ctx: &SharedContext, event: &serde_json::Value) {
 
     info!(chat_id = %chat_id, chat_type = %chat_type, len = user_text.len(), "feishu message received");
 
-    // Spawn background task so the webhook returns 200 immediately.
+    // Enqueue to per-chat processing pipeline — serializes messages
+    // so concurrent writes never corrupt the session VecDeque.
     let ctx = ctx.clone();
-    tokio::spawn(async move {
-        process_feishu_chat(&ctx, &chat_id, &chat_type, &open_id, &message_id, &user_text).await;
-    });
+    chat_queue().enqueue(ctx, ChatEvent {
+        chat_id,
+        chat_type,
+        open_id,
+        message_id,
+        user_text,
+    }).await;
 }
 
 /// Process a Feishu chat message: LLM → tool calls → LLM → send response.
+///
+/// Returns `true` if the full exchange completed normally, `false` if
+/// an error occurred (no provider, no client, LLM call failure, etc.).
+/// The scheduler uses this to decide whether to mark a task as completed
+/// or retry it on the next tick.
 pub(crate) async fn process_feishu_chat(
     ctx: &SharedContext,
     chat_id: &str,
@@ -273,7 +569,7 @@ pub(crate) async fn process_feishu_chat(
     open_id: &str,
     _message_id: &str,
     user_text: &str,
-) {
+) -> bool {
     // 1. Start with Flash (fast, cheap). The AI can call `use_pro_model`
     //    during the tool loop to switch to Pro for complex reasoning.
     let mut provider = match ctx.providers.flash() {
@@ -281,7 +577,7 @@ pub(crate) async fn process_feishu_chat(
         None => {
             warn!("no flash provider available for feishu chat");
             send_fallback(ctx, chat_id, chat_type, open_id, "Service unavailable: no model provider").await;
-            return;
+            return false;
         }
     };
 
@@ -291,14 +587,38 @@ pub(crate) async fn process_feishu_chat(
     // 2. Create/reuse session (keyed by chat_id for continuous conversation).
     let session = ctx.sessions.get_or_create(chat_id, "feishu").await;
 
-    // 3. Count user tokens for later persistence (deferred to avoid
-    //    duplicating the user message in both session history and the live
-    //    messages Vec — see step 4 below).
-    let user_tokens = provider.count_tokens(user_text);
+    // 3. Save user message to session FIRST so the session VecDeque
+    //    maintains chronological order (user → assistant → tool → ...).
+    //    The `[Scheduled task trigger]` prefix is used by the scheduler to
+    //    help the LLM context but is stripped here for clean session storage.
+    // Strip the scheduler's trigger prefix for clean session storage.
+    // Format: "[Scheduled task trigger] <task>\nEXECUTE this task NOW..."
+    // We keep just the <task> part as the user-visible message.
+    let clean_text = if let Some(rest) = user_text.strip_prefix("[Scheduled task trigger] ") {
+        rest.lines().next().unwrap_or(rest)
+    } else {
+        user_text
+    };
+    let user_tokens = provider.count_tokens(clean_text);
+    {
+        let mut s = session.write().await;
+        s.push_message(
+            ChatMessage {
+                role: "user".into(),
+                content: clean_text.to_owned(),
+                tool_calls: None,
+                tool_call_id: None,
+                reasoning_content: None,
+            },
+            user_tokens,
+        );
+    }
 
-    // 4. Build initial messages: system prompt + memory + conversation history + current user text.
-    // Memory is keyed by open_id (individual user) even in group chats,
-    // so each user's preferences and facts remain private.
+    // 4. Build initial messages: system prompt + memory + conversation history.
+    //    The current user text is already part of the session (saved above),
+    //    so it comes from `context()` as the last message — no separate append needed.
+    //    Use the original `user_text` (with prefix if present) so the LLM
+    //    receives the full context even though the session stores the clean version.
     let system_msg = arcc_core::model::prompts::templates::server().to_chat_message();
     let memory_user_id = if chat_type == "group" { open_id } else { chat_id };
     let memory_context = ctx.memory.format_for_context(memory_user_id);
@@ -316,11 +636,16 @@ pub(crate) async fn process_feishu_chat(
     }
 
     // Load conversation history from session so the LLM has full context
-    // of previous turns. Without this, every user message is treated as
-    // a fresh conversation and the AI "forgets" what was discussed.
+    // of previous turns.  The current user text is already the last
+    // message in the session (saved in step 3), so it is included in the
+    // history and serves as the prompt for this exchange.
+    //
+    // Sanitize the history to remove orphan tool messages that would
+    // cause DeepSeek API 400 errors ("assistant message with tool_calls
+    // must be followed by tool messages").
+    let mut history = session.read().await.context();
+    sanitize_history(&mut history);
     {
-        let s = session.read().await;
-        let history = s.context();
         for msg in history {
             // Skip plain system messages (already added above);
             // but keep summary system messages from compression.
@@ -331,20 +656,14 @@ pub(crate) async fn process_feishu_chat(
         }
     }
 
-    messages.push(ChatMessage {
-        role: "user".into(),
-        content: user_text.to_owned(),
-        tool_calls: None,
-        tool_call_id: None,
-        reasoning_content: None,
-    });
+    // (user text is already saved in step 3 — not appended here)
 
     // 5. Get feishu client and compute reply target (needed for ACK + proactive result).
     let client = match ctx.feishu_client.as_ref() {
         Some(c) => c,
         None => {
             warn!("feishu client not available");
-            return;
+            return false;
         }
     };
     let (reply_id, reply_id_type) = if chat_type == "group" {
@@ -359,6 +678,7 @@ pub(crate) async fn process_feishu_chat(
         tools::reply_to_user_definition(),
         tools::use_pro_model_definition(),
         tools::schedule_task_definition(),
+        tools::get_current_time_definition(),
         tools::list_scheduled_tasks_definition(),
         tools::cancel_scheduled_task_definition(),
     ];
@@ -367,6 +687,11 @@ pub(crate) async fn process_feishu_chat(
     let mut phase: u8 = 1;
     let mut tool_rounds: usize = 0;
     const MAX_TOOL_ROUNDS: usize = 10;
+
+    // Track whether `reply_to_user` was called by the AI during the
+    // tool loop.  If so, skip the final auto-reply below to avoid
+    // sending the user two messages for the same exchange.
+    let mut replied_to_user = false;
 
     let reply_text = loop {
         let has_tools = phase == 1;
@@ -387,7 +712,7 @@ pub(crate) async fn process_feishu_chat(
             Err(e) => {
                 error!(err = %e, "LLM call failed for feishu message");
                 send_fallback(ctx, chat_id, chat_type, open_id, "Sorry, I encountered an error processing your message.").await;
-                return;
+                return false;
             }
         };
 
@@ -446,206 +771,18 @@ pub(crate) async fn process_feishu_chat(
         for tc in &tool_calls {
             info!(tool = %tc.name, id = %tc.id, "executing feishu tool call");
 
-            let (tool_ok, tool_content) = if tc.name == "reply_to_user" {
-                let message = tc.arguments["message"].as_str().unwrap_or("");
-                let msg_with_mention = maybe_mention(message, chat_type, open_id);
-                match client
-                    .send_message_to(&reply_id, reply_id_type, post_md(&msg_with_mention), "post")
-                    .await
-                {
-                    Ok(()) => {
-                        info!("reply_to_user: message sent to user");
-                        (true, "Message sent to user successfully.".into())
-                    }
-                    Err(e) => {
-                        warn!(err = %e, "reply_to_user failed");
-                        (false, format!("Failed to send message: {e}"))
-                    }
-                }
-            } else if tc.name == "schedule_task" {
-                let cron_raw = tc.arguments.get("cron").and_then(|v| v.as_str());
-                let cron = cron_raw.filter(|s| !s.is_empty());
-                if cron_raw.is_some() && cron.is_none() {
-                    warn!("LLM sent empty cron string, treating as one-shot");
-                }
-                let task = tc.arguments["task"].as_str().unwrap_or("");
-
-                // One-shot task (no cron): fire on the next scheduler tick.
-                let (task_cron, next_run_str) =
-                    if let Some(cron_expr) = cron {
-                        // Recurring: parse cron and compute next run.
-                        let schedule = match cron::Schedule::from_str(cron_expr) {
-                            Ok(s) => s,
-                            Err(e) => {
-                                warn!(cron_expr, err = %e, "invalid cron expression");
-                                let content = format!("Invalid cron expression '{cron_expr}': {e}");
-                                messages.push(tool_error_msg(&tc.id, content));
-                                continue;
-                            }
-                        };
-
-                        let local = match schedule.upcoming(chrono::Local).next() {
-                            Some(t) => t,
-                            None => {
-                                warn!(cron_expr, "cron expression never repeats");
-                                let content: String = "Cron expression never repeats (no future occurrence).".into();
-                                messages.push(tool_error_msg(&tc.id, content));
-                                continue;
-                            }
-                        };
-                        let formatted = local.format("%Y-%m-%d %H:%M:%S").to_string();
-                        (Some(cron_expr.to_owned()), formatted)
-                    } else {
-                        // One-shot: fire immediately.
-                        let formatted = chrono::Local::now()
-                            .format("%Y-%m-%d %H:%M:%S")
-                            .to_string();
-                        (None, formatted)
-                    };
-
-                let task_id = uuid::Uuid::new_v4().to_string();
-                let scheduled = ScheduledTask {
-                    id: task_id.clone(),
-                    chat_id: chat_id.to_owned(),
-                    chat_type: chat_type.to_owned(),
-                    open_id: open_id.to_owned(),
-                    reply_id: reply_id.clone(),
-                    reply_id_type: reply_id_type.to_string(),
-                    cron: task_cron.clone(),
-                    task_description: task.to_owned(),
-                    status: "pending".into(),
-                    next_run_at: next_run_str.clone(),
-                    last_run_at: None,
-                    created_at: None,
-                    updated_at: None,
-                };
-
-                let (tool_ok, tool_content) = match ctx.storage.create_scheduled_task(&scheduled) {
-                    Ok(()) => {
-                        info!(task_id, next_run = %next_run_str, "task scheduled");
-                        // Update memory with the active task so subsequent
-                        // conversations know about it without re-extraction.
-                        let mem_user_id = if chat_type == "group" { open_id } else { chat_id };
-                        let _ = ctx.memory.set(mem_user_id, "active-scheduled-tasks", task, "extraction");
-                        (true, format!(
-                            "Task scheduled successfully. Next run at: {next_run_str}"
-                        ))
-                    }
-                    Err(e) => {
-                        warn!(task_id, err = %e, "failed to persist scheduled task");
-                        (false, format!("Failed to save task: {e}"))
-                    }
-                };
-
-                // Notify the user that the task was scheduled.
-                if tool_ok {
-                    let cron_display = match &task_cron {
-                        Some(c) => format!("`{c}`"),
-                        None => "one-shot".into(),
-                    };
-                    // Escape markdown metacharacters in user-provided task
-                    // description to prevent Feishu markdown rendering issues
-                    // (e.g. newlines breaking blockquotes, `>` creating nested
-                    // quotes, backticks breaking inline code).
-                    let safe_task = task.replace('>', "\\>").replace('\n', " ").replace('\r', "");
-                    let confirm = format!(
-                        "✅ Task scheduled!\n> {}\nCron: {}\nNext run: {}",
-                        safe_task,
-                        cron_display,
-                        next_run_str,
-                    );
-                    let confirm_with_mention = maybe_mention(&confirm, chat_type, open_id);
-                    let _ = client
-                        .send_message_to(&reply_id, reply_id_type, post_md(&confirm_with_mention), "post")
-                        .await;
-                }
-
-                (tool_ok, tool_content)
-            } else if tc.name == "list_scheduled_tasks" {
-                let tasks = match ctx.storage.list_tasks_by_user(chat_id) {
-                    Ok(t) => t,
-                    Err(e) => {
-                        warn!(err = %e, "list_scheduled_tasks failed");
-                        let content = format!("Failed to list tasks: {e}");
-                        let tool_msg = ChatMessage {
-                            role: "tool".into(), content: content.clone(),
-                            tool_calls: None, tool_call_id: Some(tc.id.clone()),
-                            reasoning_content: None,
-                        };
-                        messages.push(tool_msg);
-                        continue;
-                    }
-                };
-
-                if tasks.is_empty() {
-                    (true, "You have no active scheduled tasks.".into())
-                } else {
-                    let mut lines = String::from("Your scheduled tasks:\n\n");
-                    for task in &tasks {
-                        lines.push_str(&format!(
-                            "- `{}`: {} (cron: {}, next: {}) [{}]\n",
-                            task.id, task.task_description,
-                            task.cron.as_deref().unwrap_or("one-shot"),
-                            task.next_run_at, task.status,
-                        ));
-                    }
-                    (true, lines)
-                }
-            } else if tc.name == "use_pro_model" {
-                if let Some(ref pro) = pro_provider {
-                    provider = pro.clone();
-                    info!("switched to Pro model for complex task");
-                    (true, "Switched to Pro model. I now have more reasoning capacity to handle this task.".into())
-                } else {
-                    (false, "Pro model is not available.".into())
-                }
-            } else if tc.name == "cancel_scheduled_task" {
-                let task_id = tc.arguments["task_id"].as_str().unwrap_or("");
-                let action = tc.arguments["action"].as_str().unwrap_or("delete");
-
-                if action == "pause" {
-                    match ctx.storage.pause_task(task_id) {
-                        Ok(()) => {
-                            info!(task_id, "task paused");
-                            (true, format!("Task {task_id} has been paused."))
-                        }
-                        Err(e) => {
-                            warn!(task_id, err = %e, "pause_task failed");
-                            (false, format!("Failed to pause task: {e}"))
-                        }
-                    }
-                } else {
-                    match ctx.storage.delete_task(task_id) {
-                        Ok(true) => {
-                            info!(task_id, "task deleted");
-                            (true, format!("Task {task_id} has been deleted."))
-                        }
-                        Ok(false) => (false, format!("Task {task_id} not found.")),
-                        Err(e) => {
-                            warn!(task_id, err = %e, "delete_task failed");
-                            (false, format!("Failed to delete task: {e}"))
-                        }
-                    }
-                }
-            } else {
-                let command = tc.arguments["command"].as_str().unwrap_or("").to_owned();
-                let al = ctx.allowlist.read().await;
-
-                let result = match tools::execute_command(&command, &al, true).await {
-                    Ok(output) => {
-                        let content = if output.stderr.is_empty() {
-                            output.stdout
-                        } else {
-                            format!("exit_code: {:?}\nstdout:\n{}\nstderr:\n{}",
-                                output.exit_code, output.stdout, output.stderr)
-                        };
-                        (true, content)
-                    }
-                    Err(e) => (false, e.to_string()),
-                };
-                drop(al);
-                result
+            let (tool_ok, tool_content) = match tc.name.as_str() {
+                "reply_to_user" => handle_reply_to_user(tc, client, chat_type, open_id, &reply_id, reply_id_type).await,
+                "get_current_time" => handle_get_current_time(),
+                "schedule_task" => handle_schedule_task(ctx, tc, chat_id, chat_type, open_id, &reply_id, reply_id_type).await,
+                "list_scheduled_tasks" => handle_list_tasks(ctx, tc, chat_id).await,
+                "use_pro_model" => handle_use_pro_model(tc, pro_provider.as_ref(), &mut provider),
+                "cancel_scheduled_task" => handle_cancel_task(ctx, tc).await,
+                _ => handle_execute_command(ctx, tc).await,
             };
+            if tc.name == "reply_to_user" && tool_ok {
+                replied_to_user = true;
+            }
             info!(tool = %tc.name, ok = tool_ok, "tool executed");
 
             let tool_content_clone = tool_content.clone();
@@ -685,31 +822,17 @@ pub(crate) async fn process_feishu_chat(
         }
     };
 
-    // 8. Persist the user message now that the full exchange is complete.
-    //    Deferred to avoid duplicating it in both session history and the
-    //    live messages Vec (the user text was appended to `messages` once
-    //    in step 4, and reading it back via `s.context()` would add it again).
-    {
-        let mut s = session.write().await;
-        s.push_message(
-            ChatMessage {
-                role: "user".into(),
-                content: user_text.to_owned(),
-                tool_calls: None,
-                tool_call_id: None,
-                reasoning_content: None,
-            },
-            user_tokens,
-        );
-    }
-
-    // 9. Send the final result back to the user.
-    let reply_with_mention = maybe_mention(&reply_text, chat_type, open_id);
-    if let Err(e) = client
-        .send_message_to(&reply_id, reply_id_type, post_md(&reply_with_mention), "post")
-        .await
-    {
-        warn!(err = %e, "failed to send feishu result");
+    // 8. Send the final result back to the user.
+    // Skip if AI already called `reply_to_user` — otherwise the user
+    // gets two messages for the same exchange.
+    if !replied_to_user {
+        let reply_with_mention = maybe_mention(&reply_text, chat_type, open_id);
+        if let Err(e) = client
+            .send_message_to(&reply_id, reply_id_type, post_md(&reply_with_mention), "post")
+            .await
+        {
+            warn!(err = %e, "failed to send feishu result");
+        }
     }
 
     // 9. Background memory extraction (keyed by open_id for group chats).
@@ -727,6 +850,8 @@ pub(crate) async fn process_feishu_chat(
     if let Some(flash) = ctx.providers.flash() {
         ctx.sessions.compress_all(flash.as_ref()).await;
     }
+
+    true
 }
 
 /// Send a fallback text message when normal processing fails.

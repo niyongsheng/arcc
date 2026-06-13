@@ -14,6 +14,21 @@ use tracing::error;
 use arcc_core::context::SharedContext;
 use arcc_storage::db::models::MemoryFact;
 
+// ── Helpers ───────────────────────────────────────────────────────
+
+fn mem_err(e: impl std::fmt::Display) -> (StatusCode, Json<MemoryError>) {
+    error!(err = %e, "memory operation failed");
+    (StatusCode::INTERNAL_SERVER_ERROR, Json(MemoryError { error: e.to_string() }))
+}
+
+fn not_found(msg: &str) -> (StatusCode, Json<MemoryError>) {
+    (StatusCode::NOT_FOUND, Json(MemoryError { error: msg.into() }))
+}
+
+fn bad_request(msg: &str) -> (StatusCode, Json<MemoryError>) {
+    (StatusCode::BAD_REQUEST, Json(MemoryError { error: msg.into() }))
+}
+
 // ── Request / Response types ─────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -39,15 +54,7 @@ pub async fn list_memories(
     State(ctx): State<SharedContext>,
     Path(user_id): Path<String>,
 ) -> Result<Json<Vec<MemoryFact>>, (StatusCode, Json<MemoryError>)> {
-    ctx.memory.list(&user_id).map(Json).map_err(|e| {
-        error!(err = %e, "failed to list memories");
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(MemoryError {
-                error: e.to_string(),
-            }),
-        )
-    })
+    ctx.memory.list(&user_id).map(Json).map_err(mem_err)
 }
 
 /// POST /memory/{user_id} — create a new fact for a user.
@@ -60,41 +67,15 @@ pub async fn create_memory(
     let value = body.value.trim().to_owned();
 
     if key.is_empty() || value.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(MemoryError {
-                error: "key and value must not be empty".into(),
-            }),
-        ));
+        return Err(bad_request("key and value must not be empty"));
     }
 
-    ctx.memory.set(&user_id, &key, &value, "manual").map_err(|e| {
-        error!(err = %e, "failed to create memory");
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(MemoryError {
-                error: e.to_string(),
-            }),
-        )
-    })?;
+    ctx.memory.set(&user_id, &key, &value, "manual").map_err(mem_err)?;
 
     // Read back the inserted fact.
-    let facts = ctx.memory.list(&user_id).map_err(|e| {
-        error!(err = %e, "failed to read back memory after insert");
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(MemoryError {
-                error: e.to_string(),
-            }),
-        )
-    })?;
+    let facts = ctx.memory.list(&user_id).map_err(mem_err)?;
     let fact = facts.into_iter().find(|f| f.key == key).ok_or_else(|| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(MemoryError {
-                error: "fact not found after insert".into(),
-            }),
-        )
+        mem_err("fact not found after insert")
     })?;
 
     Ok((StatusCode::CREATED, Json(fact)))
@@ -109,41 +90,15 @@ pub async fn update_memory(
     let value = body.value.trim().to_owned();
 
     if value.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(MemoryError {
-                error: "value must not be empty".into(),
-            }),
-        ));
+        return Err(bad_request("value must not be empty"));
     }
 
-    ctx.memory.set(&user_id, &key, &value, "manual").map_err(|e| {
-        error!(err = %e, "failed to update memory");
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(MemoryError {
-                error: e.to_string(),
-            }),
-        )
-    })?;
+    ctx.memory.set(&user_id, &key, &value, "manual").map_err(mem_err)?;
 
     // Read back the updated fact.
-    let facts = ctx.memory.list(&user_id).map_err(|e| {
-        error!(err = %e, "failed to read back memory after update");
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(MemoryError {
-                error: e.to_string(),
-            }),
-        )
-    })?;
+    let facts = ctx.memory.list(&user_id).map_err(mem_err)?;
     let fact = facts.into_iter().find(|f| f.key == key).ok_or_else(|| {
-        (
-            StatusCode::NOT_FOUND,
-            Json(MemoryError {
-                error: "fact not found".into(),
-            }),
-        )
+        not_found("fact not found")
     })?;
 
     Ok(Json(fact))
@@ -154,24 +109,11 @@ pub async fn delete_memory(
     State(ctx): State<SharedContext>,
     Path((user_id, key)): Path<(String, String)>,
 ) -> Result<StatusCode, (StatusCode, Json<MemoryError>)> {
-    let deleted = ctx.memory.delete(&user_id, &key).map_err(|e| {
-        error!(err = %e, "failed to delete memory");
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(MemoryError {
-                error: e.to_string(),
-            }),
-        )
-    })?;
+    let deleted = ctx.memory.delete(&user_id, &key).map_err(mem_err)?;
 
     if deleted {
         Ok(StatusCode::NO_CONTENT)
     } else {
-        Err((
-            StatusCode::NOT_FOUND,
-            Json(MemoryError {
-                error: "fact not found".into(),
-            }),
-        ))
+        Err(not_found("fact not found"))
     }
 }
