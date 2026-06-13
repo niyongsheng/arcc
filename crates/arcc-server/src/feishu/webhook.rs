@@ -503,7 +503,7 @@ pub(crate) async fn process_feishu_chat(
                     }
                 };
 
-                let next_run = match schedule.upcoming(chrono::Utc).next() {
+                let next_run_local = match schedule.upcoming(chrono::Local).next() {
                     Some(t) => t,
                     None => {
                         warn!(cron, "cron expression never repeats");
@@ -519,6 +519,9 @@ pub(crate) async fn process_feishu_chat(
                         continue;
                     }
                 };
+                // Convert to UTC for DB storage and query compatibility
+                // (SQLite datetime('now') returns UTC).
+                let next_run = next_run_local.with_timezone(&chrono::Utc);
 
                 let task_id = uuid::Uuid::new_v4().to_string();
                 let scheduled = ScheduledTask {
@@ -539,14 +542,14 @@ pub(crate) async fn process_feishu_chat(
 
                 let (tool_ok, tool_content) = match ctx.storage.create_scheduled_task(&scheduled) {
                     Ok(()) => {
-                        info!(task_id, next_run = %next_run, "task scheduled");
+                        info!(task_id, next_run = %next_run_local, "task scheduled");
                         // Update memory with the active task so subsequent
                         // conversations know about it without re-extraction.
                         let mem_user_id = if chat_type == "group" { open_id } else { chat_id };
                         let _ = ctx.memory.set(mem_user_id, "active-scheduled-tasks", task, "extraction");
                         (true, format!(
                             "Task scheduled successfully. Next run at: {}",
-                            next_run.format("%Y-%m-%d %H:%M:%S UTC")
+                            next_run_local.format("%Y-%m-%d %H:%M:%S")
                         ))
                     }
                     Err(e) => {
@@ -561,7 +564,7 @@ pub(crate) async fn process_feishu_chat(
                         "✅ Task scheduled!\n> {}\nCron: `{}`\nNext run: {}",
                         task,
                         cron,
-                        next_run.format("%Y-%m-%d %H:%M:%S UTC"),
+                        next_run_local.format("%Y-%m-%d %H:%M:%S"),
                     );
                     let confirm_with_mention = maybe_mention(&confirm, chat_type, open_id);
                     let _ = client
