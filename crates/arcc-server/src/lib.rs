@@ -1,4 +1,5 @@
 pub mod feishu;
+pub mod middleware;
 pub mod routes;
 pub mod scheduler;
 
@@ -41,16 +42,28 @@ pub async fn run(ctx: SharedContext, daemon: bool) -> anyhow::Result<()> {
 
 fn build_router(ctx: SharedContext) -> axum::Router {
     use axum::routing::{get, post, put};
+    use axum::middleware;
 
+    // Public routes (no auth required).
     let mut router = axum::Router::new()
-        .route("/health", get(routes::health::handler))
+        .route("/health", get(routes::health::handler));
+
+    // Protected routes — require API key when configured.
+    let protected = axum::Router::new()
         .route("/chat", post(routes::chat::handler))
         .route("/memory/{user_id}", get(routes::memory::list_memories)
             .post(routes::memory::create_memory))
         .route("/memory/{user_id}/{key}", put(routes::memory::update_memory)
-            .delete(routes::memory::delete_memory));
+            .delete(routes::memory::delete_memory))
+        .route_layer(middleware::from_fn_with_state(
+            ctx.clone(),
+            crate::middleware::require_api_key,
+        ));
 
-    // Only mount Feishu endpoints when configured.
+    router = router.merge(protected);
+
+    // Only mount Feishu endpoints when configured (no auth — feishu has its
+    // own verification_token for webhooks).
     if ctx.feishu_client.is_some() {
         router = router
             .route("/feishu/webhook", post(feishu::webhook::handler))

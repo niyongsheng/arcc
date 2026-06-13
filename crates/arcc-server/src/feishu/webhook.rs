@@ -293,21 +293,10 @@ pub(crate) async fn process_feishu_chat(
     // 2. Create/reuse session (keyed by chat_id for continuous conversation).
     let session = ctx.sessions.get_or_create(chat_id, "feishu").await;
 
-    // 3. Persist user message.
+    // 3. Count user tokens for later persistence (deferred to avoid
+    //    duplicating the user message in both session history and the live
+    //    messages Vec — see step 4 below).
     let user_tokens = provider.count_tokens(user_text);
-    {
-        let mut s = session.write().await;
-        s.push_message(
-            ChatMessage {
-                role: "user".into(),
-                content: user_text.to_owned(),
-                tool_calls: None,
-                tool_call_id: None,
-                reasoning_content: None,
-            },
-            user_tokens,
-        );
-    }
 
     // 4. Build initial messages: system prompt + memory + conversation history + current user text.
     // Memory is keyed by open_id (individual user) even in group chats,
@@ -377,7 +366,9 @@ pub(crate) async fn process_feishu_chat(
     ];
     let temperature = ctx.storage.config.model.temperature;
     let max_tokens = ctx.storage.config.model.max_output_tokens;
-    let mut phase = 1;
+    let mut phase: u8 = 1;
+    let mut tool_rounds: usize = 0;
+    const MAX_TOOL_ROUNDS: usize = 10;
 
     let reply_text = loop {
         let has_tools = phase == 1;
@@ -549,6 +540,10 @@ pub(crate) async fn process_feishu_chat(
                 let (tool_ok, tool_content) = match ctx.storage.create_scheduled_task(&scheduled) {
                     Ok(()) => {
                         info!(task_id, next_run = %next_run, "task scheduled");
+                        // Update memory with the active task so subsequent
+                        // conversations know about it without re-extraction.
+                        let mem_user_id = if chat_type == "group" { open_id } else { chat_id };
+                        let _ = ctx.memory.set(mem_user_id, "active-scheduled-tasks", task, "extraction");
                         (true, format!(
                             "Task scheduled successfully. Next run at: {}",
                             next_run.format("%Y-%m-%d %H:%M:%S UTC")
@@ -688,11 +683,36 @@ pub(crate) async fn process_feishu_chat(
             }
         }
 
-        // Move to phase 2 for next LLM call (no tools, just summarise).
-        phase = 2;
+        // Stay in Phase 1 so the LLM can orchestrate multi-step tool
+        // sequences (e.g. check the time first, then schedule a task).
+        // Only move to Phase 2 as a safety stop if the tool rounds exceed
+        // the maximum allowed.
+        tool_rounds += 1;
+        if tool_rounds >= MAX_TOOL_ROUNDS {
+            warn!(tool_rounds, "feishu tool calling exceeded max rounds, forcing phase 2");
+            phase = 2;
+        }
     };
 
-    // 8. Send the final result back to the user.
+    // 8. Persist the user message now that the full exchange is complete.
+    //    Deferred to avoid duplicating it in both session history and the
+    //    live messages Vec (the user text was appended to `messages` once
+    //    in step 4, and reading it back via `s.context()` would add it again).
+    {
+        let mut s = session.write().await;
+        s.push_message(
+            ChatMessage {
+                role: "user".into(),
+                content: user_text.to_owned(),
+                tool_calls: None,
+                tool_call_id: None,
+                reasoning_content: None,
+            },
+            user_tokens,
+        );
+    }
+
+    // 9. Send the final result back to the user.
     let reply_with_mention = maybe_mention(&reply_text, chat_type, open_id);
     if let Err(e) = client
         .send_message_to(&reply_id, reply_id_type, post_md(&reply_with_mention), "post")
@@ -711,6 +731,11 @@ pub(crate) async fn process_feishu_chat(
             warn!(err = %e, "feishu memory extraction failed");
         }
     });
+
+    // 10. Trigger context compression if the session is over its budget.
+    if let Some(flash) = ctx.providers.flash() {
+        ctx.sessions.compress_all(flash.as_ref()).await;
+    }
 }
 
 /// Send a fallback text message when normal processing fails.

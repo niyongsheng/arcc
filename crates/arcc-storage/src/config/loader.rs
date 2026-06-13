@@ -54,6 +54,12 @@ pub struct ServerConfig {
     pub host: String,
     #[serde(default = "default_port")]
     pub port: u16,
+    /// API Key for HTTP endpoint authentication.
+    /// When set, requests to protected endpoints (`/chat`, `/memory`)
+    /// must include `Authorization: Bearer <key>`.
+    /// When empty or unset, authentication is disabled (backwards compatible).
+    #[serde(default)]
+    pub api_key: Option<String>,
     #[serde(default = "default_metrics_path")]
     pub metrics_path: String,
     #[serde(default = "default_health_path")]
@@ -189,6 +195,7 @@ impl Default for ServerConfig {
         Self {
             host: default_host(),
             port: default_port(),
+            api_key: None,
             metrics_path: default_metrics_path(),
             health_path: default_health_path(),
         }

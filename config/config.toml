@@ -27,6 +27,9 @@ max_output_tokens = 4096
 [server]
 host = "127.0.0.1"
 port = 9527
+# API Key 鉴权。设置后 /chat 和 /memory 接口需要
+# Authorization: Bearer <key> 请求头。留空则不鉴权。
+# api_key = "e3f8a2b1-c4d5-4e6f-a8b9-c0d1e2f3a4b5"
 metrics_path = "/metrics"
 health_path = "/health"
 

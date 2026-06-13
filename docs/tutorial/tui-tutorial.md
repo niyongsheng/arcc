@@ -62,3 +62,47 @@ arcc tui
 - **思维链**：DeepSeek 的推理过程以灰色动画显示
 - **命令安全**：`rm`/`dd`/`mkfs` 等危险命令需人工确认（y/a/n）
 
+---
+
+## 安装
+
+### Mac / Linux
+
+```bash
+# 一键安装（ARM Mac / Linux x86_64 自动下载预编译二进制）
+curl -fsSL https://raw.githubusercontent.com/niyongsheng/arcc/main/scripts/install.sh | bash
+
+# 验证
+arcc -V
+
+# 配置 API Key
+mkdir -p ~/.arcc
+
+cat > ~/.arcc/config.toml << 'EOF'
+[model]
+api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+EOF
+
+# 启动 TUI
+arcc tui
+```
+
+### Windows
+```powershell
+# 安装（管理员权限）
+irm https://raw.githubusercontent.com/niyongsheng/arcc/main/scripts/install.ps1 | iex
+
+# 验证
+arcc -V
+
+# 配置 API Key
+New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.arcc"
+
+@'
+[model]
+api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+'@ | Out-File -Encoding utf8 "$env:USERPROFILE\.arcc\config.toml"
+
+# 启动 TUI
+arcc tui
+```
