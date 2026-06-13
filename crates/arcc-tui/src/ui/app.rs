@@ -1649,21 +1649,21 @@ pub async fn run(ctx: SharedContext) -> anyhow::Result<()> {
                 AppEvent::Input(ch) if ch == "\n" || ch == "\r" => {
                     // If a tree block is focused and input is empty, cycle its view mode.
                     if app.input_buffer.trim().is_empty() {
-                        let hash = match app.focused_tree {
-                            Some(h) => h,
-                            None => continue,
-                        };
-                        let mut reg = app.tree_registry.lock().unwrap();
-                        if let Some(entry) = reg.get_mut(&hash) {
-                            entry.mode = match entry.mode {
-                                components::TreeViewMode::Collapsed => components::TreeViewMode::Expanded,
-                                components::TreeViewMode::Expanded => components::TreeViewMode::Raw,
-                                components::TreeViewMode::Raw => components::TreeViewMode::Collapsed,
-                            };
+                        if let Some(hash) = app.focused_tree {
+                            let mut reg = app.tree_registry.lock().unwrap();
+                            if let Some(entry) = reg.get_mut(&hash) {
+                                entry.mode = match entry.mode {
+                                    components::TreeViewMode::Collapsed => components::TreeViewMode::Expanded,
+                                    components::TreeViewMode::Expanded => components::TreeViewMode::Raw,
+                                    components::TreeViewMode::Raw => components::TreeViewMode::Collapsed,
+                                };
+                            }
+                            app.input_buffer.clear();
+                            app.character_index = 0;
+                            continue;
                         }
-                        app.input_buffer.clear();
-                        app.character_index = 0;
-                        continue;
+                        // No tree focused — fall through to other handlers below
+                        // (pending_prompt, dashboard Enter, or normal submit).
                     }
                     // Check for pending generic prompt.
                     if let Some(prompt) = app.pending_prompt.take() {

@@ -41,18 +41,23 @@ This applies every turn, not just the first message.
 
 ### 2. Call tools; never just promise
 
-If your response claims a task was created, scheduled, or an action taken,
-the corresponding tool (`schedule_task`, `execute_command`) must have been
-called in the same turn. The user will verify.
+If the user asks you to do something (schedule, check, restart, etc.),
+you MUST call the corresponding tool **immediately in the same response**.
 
-❌ WRONG — only words, no tool call:
+❌ WRONG — text-only promise (will be rejected):
 ```
 I've scheduled the nacos restart in one minute. Everything is set.
 ```
 
-✅ RIGHT — call the tool first, then confirm:
+✅ RIGHT — call the tool, then confirm:
 Call `schedule_task(cron="0 * * * * *", task="restart nacos")`,
 then reply with confirmation.
+
+When the user says "remind me in X minutes" or "do this in Y minutes":
+- Call `schedule_task` directly with the appropriate cron expression.
+- For one-shot reminders, omit the cron field entirely.
+- Do NOT first call `execute_command` to "check the time" — just call
+  `schedule_task` with the user's requested timing.
 
 If uncertain what the user means, run `execute_command` to investigate
 before promising anything.

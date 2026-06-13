@@ -63,6 +63,19 @@ fn maybe_mention(text: &str, chat_type: &str, open_id: &str) -> String {
     }
 }
 
+/// Build a tool-role ChatMessage for an error result.
+/// Reduces duplication in the tool-calling loop where multiple branches
+/// construct identical tool-message structures.
+fn tool_error_msg(tool_call_id: &str, content: String) -> ChatMessage {
+    ChatMessage {
+        role: "tool".into(),
+        content,
+        tool_calls: None,
+        tool_call_id: Some(tool_call_id.to_owned()),
+        reasoning_content: None,
+    }
+}
+
 /// Feishu schema 2.0 event header.
 #[derive(Debug, Deserialize)]
 pub struct HeaderV2 {
@@ -188,21 +201,6 @@ pub async fn handler(
     })
 }
 
-/// Check if the LLM's response text promises an action that should have
-/// been done via a tool call, but no tool was actually invoked.
-///
-/// This detects patterns where the AI says things like "已安排" or
-/// "已创建定时任务" without actually calling `schedule_task`.  These
-/// false promises are the most frequent user-facing issue in server mode.
-fn has_unfulfilled_promise(text: &str) -> bool {
-    // Explicit "I already did it" commitments (highest confidence).
-    let done_commitments = ["已安排", "已创建", "创建了定时", "我已经安排"];
-    // Future time guarantees that imply a scheduled action.
-    let specific_future = ["一分钟后", "两分钟后"];
-
-    done_commitments.iter().any(|w| text.contains(w))
-        || specific_future.iter().any(|w| text.contains(w))
-}
 
 /// Handle `im.message.receive_v1` — user sent a message to the bot.
 fn handle_message_event(ctx: &SharedContext, event: &serde_json::Value) {
@@ -425,25 +423,8 @@ pub(crate) async fn process_feishu_chat(
             );
         }
 
-        // Phase 2 (no tools), or phase 1 with no tool_calls (LLM chose to
-        // reply directly) — use content as final reply.
+        // Phase 2 (no tools), or phase 1 with no tool_calls — use content as final reply.
         if !has_tools || msg.tool_calls.as_ref().is_none_or(|c| c.is_empty()) {
-            // Phase 1: LLM returned text without calling any tools.
-            // Check if it made an unfulfilled promise (said it would
-            // schedule/restart/arrange something but didn't actually
-            // call the tool).
-            if has_tools && has_unfulfilled_promise(&msg.content) {
-                warn!("LLM promised action without tool call — forcing retry");
-                messages.push(ChatMessage {
-                    role: "user".into(),
-                    content: "你在回复中承诺了要执行操作，但你没有调用对应的工具来完成。\
-                        请立即调用对应的工具来实际执行，不要只文字承诺。".into(),
-                    tool_calls: None,
-                    tool_call_id: None,
-                    reasoning_content: None,
-                });
-                continue;
-            }
             break msg.content;
         }
 
@@ -482,46 +463,45 @@ pub(crate) async fn process_feishu_chat(
                     }
                 }
             } else if tc.name == "schedule_task" {
-                let cron = tc.arguments["cron"].as_str().unwrap_or("");
+                let cron_raw = tc.arguments.get("cron").and_then(|v| v.as_str());
+                let cron = cron_raw.filter(|s| !s.is_empty());
+                if cron_raw.is_some() && cron.is_none() {
+                    warn!("LLM sent empty cron string, treating as one-shot");
+                }
                 let task = tc.arguments["task"].as_str().unwrap_or("");
 
-                // Validate cron expression.
-                let schedule = match cron::Schedule::from_str(cron) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        warn!(cron, err = %e, "invalid cron expression");
-                        let content = format!("Invalid cron expression '{cron}': {e}");
-                        let tool_msg = ChatMessage {
-                            role: "tool".into(),
-                            content: content.clone(),
-                            tool_calls: None,
-                            tool_call_id: Some(tc.id.clone()),
-                            reasoning_content: None,
+                // One-shot task (no cron): fire on the next scheduler tick.
+                let (task_cron, next_run_str) =
+                    if let Some(cron_expr) = cron {
+                        // Recurring: parse cron and compute next run.
+                        let schedule = match cron::Schedule::from_str(cron_expr) {
+                            Ok(s) => s,
+                            Err(e) => {
+                                warn!(cron_expr, err = %e, "invalid cron expression");
+                                let content = format!("Invalid cron expression '{cron_expr}': {e}");
+                                messages.push(tool_error_msg(&tc.id, content));
+                                continue;
+                            }
                         };
-                        messages.push(tool_msg);
-                        continue;
-                    }
-                };
 
-                let next_run_local = match schedule.upcoming(chrono::Local).next() {
-                    Some(t) => t,
-                    None => {
-                        warn!(cron, "cron expression never repeats");
-                        let content: String = "Cron expression never repeats (no future occurrence).".into();
-                        let tool_msg = ChatMessage {
-                            role: "tool".into(),
-                            content: content.clone(),
-                            tool_calls: None,
-                            tool_call_id: Some(tc.id.clone()),
-                            reasoning_content: None,
+                        let local = match schedule.upcoming(chrono::Local).next() {
+                            Some(t) => t,
+                            None => {
+                                warn!(cron_expr, "cron expression never repeats");
+                                let content: String = "Cron expression never repeats (no future occurrence).".into();
+                                messages.push(tool_error_msg(&tc.id, content));
+                                continue;
+                            }
                         };
-                        messages.push(tool_msg);
-                        continue;
-                    }
-                };
-                // Convert to UTC for DB storage and query compatibility
-                // (SQLite datetime('now') returns UTC).
-                let next_run = next_run_local.with_timezone(&chrono::Utc);
+                        let formatted = local.format("%Y-%m-%d %H:%M:%S").to_string();
+                        (Some(cron_expr.to_owned()), formatted)
+                    } else {
+                        // One-shot: fire immediately.
+                        let formatted = chrono::Local::now()
+                            .format("%Y-%m-%d %H:%M:%S")
+                            .to_string();
+                        (None, formatted)
+                    };
 
                 let task_id = uuid::Uuid::new_v4().to_string();
                 let scheduled = ScheduledTask {
@@ -531,10 +511,10 @@ pub(crate) async fn process_feishu_chat(
                     open_id: open_id.to_owned(),
                     reply_id: reply_id.clone(),
                     reply_id_type: reply_id_type.to_string(),
-                    cron: Some(cron.to_owned()),
+                    cron: task_cron.clone(),
                     task_description: task.to_owned(),
                     status: "pending".into(),
-                    next_run_at: next_run.format("%Y-%m-%d %H:%M:%S").to_string(),
+                    next_run_at: next_run_str.clone(),
                     last_run_at: None,
                     created_at: None,
                     updated_at: None,
@@ -542,14 +522,13 @@ pub(crate) async fn process_feishu_chat(
 
                 let (tool_ok, tool_content) = match ctx.storage.create_scheduled_task(&scheduled) {
                     Ok(()) => {
-                        info!(task_id, next_run = %next_run_local, "task scheduled");
+                        info!(task_id, next_run = %next_run_str, "task scheduled");
                         // Update memory with the active task so subsequent
                         // conversations know about it without re-extraction.
                         let mem_user_id = if chat_type == "group" { open_id } else { chat_id };
                         let _ = ctx.memory.set(mem_user_id, "active-scheduled-tasks", task, "extraction");
                         (true, format!(
-                            "Task scheduled successfully. Next run at: {}",
-                            next_run_local.format("%Y-%m-%d %H:%M:%S")
+                            "Task scheduled successfully. Next run at: {next_run_str}"
                         ))
                     }
                     Err(e) => {
@@ -560,11 +539,20 @@ pub(crate) async fn process_feishu_chat(
 
                 // Notify the user that the task was scheduled.
                 if tool_ok {
+                    let cron_display = match &task_cron {
+                        Some(c) => format!("`{c}`"),
+                        None => "one-shot".into(),
+                    };
+                    // Escape markdown metacharacters in user-provided task
+                    // description to prevent Feishu markdown rendering issues
+                    // (e.g. newlines breaking blockquotes, `>` creating nested
+                    // quotes, backticks breaking inline code).
+                    let safe_task = task.replace('>', "\\>").replace('\n', " ").replace('\r', "");
                     let confirm = format!(
-                        "✅ Task scheduled!\n> {}\nCron: `{}`\nNext run: {}",
-                        task,
-                        cron,
-                        next_run_local.format("%Y-%m-%d %H:%M:%S"),
+                        "✅ Task scheduled!\n> {}\nCron: {}\nNext run: {}",
+                        safe_task,
+                        cron_display,
+                        next_run_str,
                     );
                     let confirm_with_mention = maybe_mention(&confirm, chat_type, open_id);
                     let _ = client

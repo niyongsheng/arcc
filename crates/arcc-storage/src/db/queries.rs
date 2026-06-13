@@ -286,7 +286,7 @@ pub fn list_due_tasks(conn: &Connection) -> Result<Vec<ScheduledTask>> {
         "SELECT id, chat_id, chat_type, open_id, reply_id, reply_id_type,
                 cron, task_description, status, next_run_at, last_run_at, created_at, updated_at
          FROM scheduled_tasks
-         WHERE status = 'pending' AND next_run_at <= datetime('now')
+         WHERE status = 'pending' AND next_run_at <= datetime('now', 'localtime')
          ORDER BY next_run_at ASC",
     )?;
     let rows = stmt.query_map([], |row| {
@@ -307,6 +307,19 @@ pub fn list_due_tasks(conn: &Connection) -> Result<Vec<ScheduledTask>> {
         })
     })?;
     rows.collect()
+}
+
+/// Mark a scheduled task as completed, recording when it actually ran.
+/// Unlike `update_task_status`, this also sets `last_run_at` so one-shot
+/// tasks leave a proper audit trail.
+pub fn complete_task(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE scheduled_tasks SET status = 'completed', last_run_at = datetime('now'),
+                                     updated_at = datetime('now')
+         WHERE id = ?1",
+        params![id],
+    )?;
+    Ok(())
 }
 
 /// Update the status of a scheduled task.

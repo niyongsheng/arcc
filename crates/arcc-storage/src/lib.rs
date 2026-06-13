@@ -192,6 +192,12 @@ impl ArccStorage {
         Ok(queries::update_task_status(&conn, id, status)?)
     }
 
+    /// Mark a scheduled task as completed, recording `last_run_at` as now.
+    pub fn complete_task(&self, id: &str) -> Result<(), StorageError> {
+        let conn = self.db.lock().expect("db mutex poisoned");
+        Ok(queries::complete_task(&conn, id)?)
+    }
+
     /// Update the next_run_at timestamp for a recurring task.
     pub fn update_task_next_run(&self, id: &str, next_run_at: &str) -> Result<(), StorageError> {
         let conn = self.db.lock().expect("db mutex poisoned");

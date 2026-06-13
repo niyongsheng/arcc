@@ -85,7 +85,7 @@ pub async fn scheduler_loop(ctx: SharedContext) {
                 // Recurring: compute next run, reset to pending.
                 match cron::Schedule::from_str(cron) {
                     Ok(schedule) => {
-                        if let Some(next) = schedule.upcoming(chrono::Utc).next() {
+                        if let Some(next) = schedule.upcoming(chrono::Local).next() {
                             let next_str = next.format("%Y-%m-%d %H:%M:%S").to_string();
                             if let Err(e) = ctx.storage.update_task_next_run(&task_id, &next_str) {
                                 warn!(task_id, err = %e, "scheduler: failed to update next_run");
@@ -102,9 +102,9 @@ pub async fn scheduler_loop(ctx: SharedContext) {
                     }
                 }
             } else {
-                // One-shot: mark completed.
-                if let Err(e) = ctx.storage.update_task_status(&task_id, "completed") {
-                    warn!(task_id, err = %e, "scheduler: failed to mark task as completed");
+                // One-shot: mark completed with actual run time.
+                if let Err(e) = ctx.storage.complete_task(&task_id) {
+                    warn!(task_id, err = %e, "scheduler: failed to complete task");
                 }
                 info!(task_id, "scheduler: one-shot task completed");
             }

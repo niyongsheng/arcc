@@ -90,10 +90,13 @@ pub fn schedule_task_definition() -> ToolDefinition {
         description: "Schedule a task to run later or on a recurring schedule. \
                       Use this when the user asks you to do something at a \
                       specific time or on a recurring basis (e.g. 'restart \
-                      nginx at 1am every day'). When the task triggers, the \
-                      full LLM processing flow runs again — the AI will re-read \
-                      the task description, plan the steps, and execute them. \
-                      The result is sent back to the user automatically."
+                      nginx at 1am every day'). For one-shot tasks (e.g. \
+                      'remind me in 5 minutes'), omit the cron field and \
+                      describe the timing in the task description instead. \
+                      When the task triggers, the full LLM processing flow \
+                      runs again — the AI will re-read the task description, \
+                      plan the steps, and execute them. The result is sent \
+                      back to the user automatically."
             .into(),
         parameters: serde_json::json!({
             "type": "object",
@@ -101,6 +104,7 @@ pub fn schedule_task_definition() -> ToolDefinition {
                 "cron": {
                     "type": "string",
                     "description": "Cron expression in 6-field format (seconds prefix). \
+                                    Optional — omit for one-shot tasks.\n\
                                     Examples:\n\
                                     - '0 1 * * * *'     = daily at 1am\n\
                                     - '0 */5 * * * *'   = every 5 minutes\n\
@@ -118,7 +122,7 @@ pub fn schedule_task_definition() -> ToolDefinition {
                                     as if the user typed it directly."
                 }
             },
-            "required": ["cron", "task"]
+            "required": ["task"]
         }),
         strict: false,
     }
