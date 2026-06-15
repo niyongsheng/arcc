@@ -244,3 +244,50 @@ curl localhost:9527/metrics
   → AI 回复，但看不到 A 的记忆
   → 群聊共享对话历史，但记忆隔离
 ```
+
+## 服务器部署（systemd）
+
+### 1. 确认路径并创建服务
+
+```bash
+which arcc   # 确认路径，如 /usr/local/bin/arcc
+vim /etc/systemd/system/arcc.service
+```
+
+粘贴以下内容：
+
+```ini
+[Unit]
+Description=ARCC HTTP&Feishu Server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/root
+ExecStart=/usr/local/bin/arcc server
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### 2. 加载并启用开机后台运行
+
+```bash
+systemctl daemon-reload
+systemctl enable arcc
+systemctl start arcc
+```
+
+### 3. 管理命令
+
+```bash
+systemctl status arcc      # 状态
+journalctl -u arcc -f      # 实时日志
+systemctl stop arcc        # 停止
+systemctl restart arcc     # 重启
+systemctl disable arcc     # 取消开机自启
+```
