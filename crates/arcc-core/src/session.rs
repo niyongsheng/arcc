@@ -22,6 +22,22 @@ pub struct Session {
 }
 
 impl Session {
+    /// Acquire the database mutex and call `f` with the connection.
+    ///
+    /// Returns early (best-effort) if no DB is configured or if the mutex
+    /// is poisoned — matching the existing error-handling convention used
+    /// by the three persistence methods below.
+    fn with_db(&self, f: impl FnOnce(&rusqlite::Connection)) {
+        let db = match self.db {
+            Some(ref db) => db,
+            None => return,
+        };
+        match db.lock() {
+            Ok(conn) => f(&conn),
+            Err(e) => warn!(err = %e, "db lock poisoned"),
+        }
+    }
+
     pub fn new(
         id: &str,
         name: &str,
@@ -45,50 +61,32 @@ impl Session {
 
     /// Write the new session row to SQLite (best-effort, logs on failure).
     fn persist_new_session(&self) {
-        let db = match self.db {
-            Some(ref db) => db,
-            None => return,
-        };
-        match db.lock() {
-            Ok(conn) => {
-                if let Err(e) = conn.execute(
-                    "INSERT INTO sessions (id, name, mode, created_at, last_active_at) \
-                     VALUES (?1, ?2, ?3, datetime('now'), datetime('now')) \
-                     ON CONFLICT(id) DO UPDATE SET last_active_at = datetime('now')",
-                    rusqlite::params![self.id, self.name, self.mode],
-                ) {
-                    warn!(err = %e, session = %self.id, "failed to persist session");
-                }
+        self.with_db(|conn| {
+            if let Err(e) = conn.execute(
+                "INSERT INTO sessions (id, name, mode, created_at, last_active_at) \
+                 VALUES (?1, ?2, ?3, datetime('now'), datetime('now')) \
+                 ON CONFLICT(id) DO UPDATE SET last_active_at = datetime('now')",
+                rusqlite::params![self.id, self.name, self.mode],
+            ) {
+                warn!(err = %e, session = %self.id, "failed to persist session");
             }
-            Err(e) => {
-                warn!(err = %e, "db lock poisoned");
-            }
-        }
+        });
     }
 
     /// Persist the current summary to the `sessions` table (best-effort).
     fn persist_summary(&self) {
-        let db = match self.db {
-            Some(ref db) => db,
-            None => return,
-        };
         let summary = match self.summary {
             Some(ref s) => s,
             None => return,
         };
-        match db.lock() {
-            Ok(conn) => {
-                if let Err(e) = conn.execute(
-                    "UPDATE sessions SET summary = ?2 WHERE id = ?1",
-                    rusqlite::params![self.id, summary],
-                ) {
-                    warn!(err = %e, session = %self.id, "failed to persist summary");
-                }
+        self.with_db(|conn| {
+            if let Err(e) = conn.execute(
+                "UPDATE sessions SET summary = ?2 WHERE id = ?1",
+                rusqlite::params![self.id, summary],
+            ) {
+                warn!(err = %e, session = %self.id, "failed to persist summary");
             }
-            Err(e) => {
-                warn!(err = %e, "db lock poisoned");
-            }
-        }
+        });
     }
 
     /// Add a message to the session history and persist to SQLite.
@@ -100,48 +98,33 @@ impl Session {
 
     /// Persist the most recent message to SQLite (best-effort, logs on failure).
     fn persist_message(&self, tokens: usize) {
-        let db = match self.db {
-            Some(ref db) => db,
-            None => return,
-        };
         let msg = match self.messages.back() {
             Some(m) => m,
             None => return,
         };
-        match db.lock() {
-            Ok(conn) => {
-                if let Err(e) = conn.execute(
-                    "INSERT INTO messages (session_id, role, content, token_count, created_at) \
-                     VALUES (?1, ?2, ?3, ?4, datetime('now'))",
-                    rusqlite::params![self.id, msg.role, msg.content, tokens as i64],
-                ) {
-                    warn!(err = %e, session = %self.id, "failed to persist message");
-                }
-                // Bump session last-active timestamp.
-                if let Err(e) = conn.execute(
-                    "UPDATE sessions SET last_active_at = datetime('now') WHERE id = ?1",
-                    rusqlite::params![self.id],
-                ) {
-                    warn!(err = %e, session = %self.id, "failed to update session active time");
-                }
+        self.with_db(|conn| {
+            if let Err(e) = conn.execute(
+                "INSERT INTO messages (session_id, role, content, token_count, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, datetime('now'))",
+                rusqlite::params![self.id, msg.role, msg.content, tokens as i64],
+            ) {
+                warn!(err = %e, session = %self.id, "failed to persist message");
             }
-            Err(e) => {
-                warn!(err = %e, "db lock poisoned");
+            // Bump session last-active timestamp.
+            if let Err(e) = conn.execute(
+                "UPDATE sessions SET last_active_at = datetime('now') WHERE id = ?1",
+                rusqlite::params![self.id],
+            ) {
+                warn!(err = %e, session = %self.id, "failed to update session active time");
             }
-        }
+        });
     }
 
     /// Return current messages as a `Vec`, prepending summary if present.
     pub fn context(&self) -> Vec<ChatMessage> {
         let mut msgs = Vec::with_capacity(self.messages.len() + 1);
         if let Some(ref summary) = self.summary {
-            msgs.push(ChatMessage {
-                role: "system".into(),
-                content: format!("[conversation summary] {summary}"),
-                tool_calls: None,
-                tool_call_id: None,
-                reasoning_content: None,
-            });
+            msgs.push(ChatMessage::system(format!("[conversation summary] {summary}")));
         }
         msgs.extend(self.messages.iter().cloned());
         msgs
@@ -174,13 +157,7 @@ impl Session {
             model: flash_provider.model_name().to_owned(),
             messages: vec![
                 crate::model::prompts::templates::compress().to_chat_message(),
-                ChatMessage {
-                    role: "user".into(),
-                    content: format!("Summarise this conversation:\n{history_text}"),
-                    tool_calls: None,
-                    tool_call_id: None,
-                    reasoning_content: None,
-                },
+                ChatMessage::user(format!("Summarise this conversation:\n{history_text}")),
             ],
             tools: None,
             tool_choice: None,
@@ -204,13 +181,7 @@ impl Session {
 
                 // Replace messages with summary.
                 self.messages.clear();
-                self.messages.push_back(ChatMessage {
-                    role: "assistant".into(),
-                    content: format!("[summary] {summary_text}"),
-                    tool_calls: None,
-                    tool_call_id: None,
-                    reasoning_content: None,
-                });
+                self.messages.push_back(ChatMessage::assistant(format!("[summary] {summary_text}")));
                 self.summary = Some(summary_text);
                 self.persist_summary();
                 self.token_count = flash_provider.count_tokens(
@@ -243,6 +214,20 @@ impl Session {
         self.messages.clear();
         self.token_count = 0;
         self.summary = None;
+    }
+
+    /// Reset session with a fresh ID and empty context.
+    ///
+    /// DB connection is preserved so new messages persist under the new
+    /// session ID.  Used by TUI `/clear` to fully reset AI conversation
+    /// context — the model sees no prior messages even if the Session
+    /// object is reused.
+    pub fn reset(&mut self, new_id: &str) {
+        self.id = new_id.to_owned();
+        self.messages.clear();
+        self.token_count = 0;
+        self.summary = None;
+        self.persist_new_session();
     }
 
     /// Lazily enable DB persistence for a session that was created with

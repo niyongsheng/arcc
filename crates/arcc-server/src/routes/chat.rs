@@ -58,13 +58,7 @@ pub async fn handler(
     let mut messages = Vec::new();
     messages.push(system_msg);
     if !memory_context.is_empty() {
-        messages.push(ChatMessage {
-            role: "system".into(),
-            content: memory_context,
-            tool_calls: None,
-            tool_call_id: None,
-            reasoning_content: None,
-        });
+        messages.push(ChatMessage::system(memory_context));
     }
 
     // Load conversation history so the LLM has multi-turn context.
@@ -80,13 +74,7 @@ pub async fn handler(
         }
     }
 
-    messages.push(ChatMessage {
-        role: "user".into(),
-        content: input.prompt.clone(),
-        tool_calls: None,
-        tool_call_id: None,
-        reasoning_content: None,
-    });
+    messages.push(ChatMessage::user(input.prompt.clone()));
 
     let req = ChatRequest {
         model: provider.model_name().to_owned(),
@@ -116,13 +104,7 @@ pub async fn handler(
             {
                 let mut s = session.write().await;
                 s.push_message(
-                    ChatMessage {
-                        role: "user".into(),
-                        content: input.prompt.clone(),
-                        tool_calls: None,
-                        tool_call_id: None,
-                        reasoning_content: None,
-                    },
+                    ChatMessage::user(input.prompt.clone()),
                     user_msg_tokens,
                 );
             }

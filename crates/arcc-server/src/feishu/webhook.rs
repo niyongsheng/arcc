@@ -314,12 +314,7 @@ async fn handle_execute_command(
         ctx.storage.config.execution.max_output_bytes,
     ).await {
         Ok(output) => {
-            let content = if output.stderr.is_empty() {
-                output.stdout
-            } else {
-                format!("exit_code: {:?}\nstdout:\n{}\nstderr:\n{}",
-                    output.exit_code, output.stdout, output.stderr)
-            };
+            let content = output.to_content();
             (true, content)
         }
         Err(e) => (false, e.to_string()),
@@ -603,13 +598,7 @@ pub(crate) async fn process_feishu_chat(
     {
         let mut s = session.write().await;
         s.push_message(
-            ChatMessage {
-                role: "user".into(),
-                content: clean_text.to_owned(),
-                tool_calls: None,
-                tool_call_id: None,
-                reasoning_content: None,
-            },
+            ChatMessage::user(clean_text.to_owned()),
             user_tokens,
         );
     }
@@ -626,13 +615,7 @@ pub(crate) async fn process_feishu_chat(
     let mut messages = Vec::new();
     messages.push(system_msg);
     if !memory_context.is_empty() {
-        messages.push(ChatMessage {
-            role: "system".into(),
-            content: memory_context,
-            tool_calls: None,
-            tool_call_id: None,
-            reasoning_content: None,
-        });
+        messages.push(ChatMessage::system(memory_context));
     }
 
     // Load conversation history from session so the LLM has full context
@@ -786,26 +769,13 @@ pub(crate) async fn process_feishu_chat(
             info!(tool = %tc.name, ok = tool_ok, "tool executed");
 
             let tool_content_clone = tool_content.clone();
-            let tool_msg = ChatMessage {
-                role: "tool".into(),
-                content: tool_content_clone,
-                tool_calls: None,
-                tool_call_id: Some(tc.id.clone()),
-                reasoning_content: None,
-            };
-            messages.push(tool_msg);
+            messages.push(ChatMessage::tool_result(tc.id.clone(), tool_content_clone));
 
             // Persist tool result.
             {
                 let mut s = session.write().await;
                 s.push_message(
-                    ChatMessage {
-                        role: "tool".into(),
-                        content: tool_content.clone(),
-                        tool_calls: None,
-                        tool_call_id: Some(tc.id.clone()),
-                        reasoning_content: None,
-                    },
+                    ChatMessage::tool_result(tc.id.clone(), tool_content.clone()),
                     provider.count_tokens(&tool_content),
                 );
             }

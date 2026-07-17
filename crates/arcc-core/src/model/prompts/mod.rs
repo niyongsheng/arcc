@@ -40,13 +40,7 @@ impl SystemPrompt {
     /// All optional fields are set to `None` — tool calls are never part
     /// of a system message.
     pub fn to_chat_message(&self) -> ChatMessage {
-        ChatMessage {
-            role: "system".into(),
-            content: self.content.clone(),
-            tool_calls: None,
-            tool_call_id: None,
-            reasoning_content: None,
-        }
+        ChatMessage::system(self.content.clone())
     }
 
     /// Consume the wrapper and return the raw prompt text.

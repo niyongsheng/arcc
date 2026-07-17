@@ -32,6 +32,15 @@ pub enum MemoryError {
 }
 
 impl MemoryManager {
+    /// Acquire the database mutex and call `f` with the connection.
+    ///
+    /// Panics on poison, matching the existing convention used by
+    /// all CRUD methods.
+    fn with_db<T>(&self, f: impl FnOnce(&rusqlite::Connection) -> Result<T, MemoryError>) -> Result<T, MemoryError> {
+        let conn = self.db.lock().expect("db mutex poisoned");
+        f(&conn)
+    }
+
     /// Create a new `MemoryManager`.
     pub fn new(
         db: Arc<Mutex<rusqlite::Connection>>,
@@ -57,13 +66,7 @@ impl MemoryManager {
             model: self.flash_provider.model_name().to_owned(),
             messages: vec![
                 templates::memory_extract().to_chat_message(),
-                ChatMessage {
-                    role: "user".into(),
-                    content: exchange,
-                    tool_calls: None,
-                    tool_call_id: None,
-                    reasoning_content: None,
-                },
+                ChatMessage::user(exchange),
             ],
             tools: None,
             tool_choice: None,
@@ -87,27 +90,28 @@ impl MemoryManager {
             return Ok(());
         }
 
-        let conn = self.db.lock().expect("db mutex poisoned");
-
-        for line in body.lines() {
-            let line = line.trim();
-            if let Some((key, value)) = line.split_once(':') {
-                let key = key.trim().to_lowercase().replace(' ', "-");
-                let value = value.trim();
-                if key.is_empty() || value.is_empty() {
-                    continue;
-                }
-                if let Err(e) = conn.execute(
-                    "INSERT INTO memories (user_id, key, value, source, created_at, updated_at)
-                     VALUES (?1, ?2, ?3, 'extraction', datetime('now'), datetime('now'))
-                     ON CONFLICT(user_id, key) DO UPDATE SET
-                         value = ?3, source = 'extraction', updated_at = datetime('now')",
-                    rusqlite::params![user_id, key, value],
-                ) {
-                    warn!(err = %e, "failed to persist memory fact: {key}");
+        self.with_db(|conn| {
+            for line in body.lines() {
+                let line = line.trim();
+                if let Some((key, value)) = line.split_once(':') {
+                    let key = key.trim().to_lowercase().replace(' ', "-");
+                    let value = value.trim();
+                    if key.is_empty() || value.is_empty() {
+                        continue;
+                    }
+                    if let Err(e) = conn.execute(
+                        "INSERT INTO memories (user_id, key, value, source, created_at, updated_at)
+                         VALUES (?1, ?2, ?3, 'extraction', datetime('now'), datetime('now'))
+                         ON CONFLICT(user_id, key) DO UPDATE SET
+                             value = ?3, source = 'extraction', updated_at = datetime('now')",
+                        rusqlite::params![user_id, key, value],
+                    ) {
+                        warn!(err = %e, "failed to persist memory fact: {key}");
+                    }
                 }
             }
-        }
+            Ok(())
+        })?;
 
         Ok(())
     }
@@ -141,25 +145,26 @@ impl MemoryManager {
 
     /// List all memory facts for a user.
     pub fn list(&self, user_id: &str) -> Result<Vec<MemoryFact>, MemoryError> {
-        let conn = self.db.lock().expect("db mutex poisoned");
-        let mut stmt = conn.prepare(
-            "SELECT id, user_id, key, value, source, created_at, updated_at
-             FROM memories
-             WHERE user_id = ?1
-             ORDER BY updated_at DESC",
-        )?;
-        let rows = stmt.query_map(rusqlite::params![user_id], |row| {
-            Ok(MemoryFact {
-                id: Some(row.get(0)?),
-                user_id: row.get(1)?,
-                key: row.get(2)?,
-                value: row.get(3)?,
-                source: row.get(4)?,
-                created_at: Some(row.get(5)?),
-                updated_at: Some(row.get(6)?),
-            })
-        })?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(MemoryError::Db)
+        self.with_db(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, user_id, key, value, source, created_at, updated_at
+                 FROM memories
+                 WHERE user_id = ?1
+                 ORDER BY updated_at DESC",
+            )?;
+            let rows = stmt.query_map(rusqlite::params![user_id], |row| {
+                Ok(MemoryFact {
+                    id: Some(row.get(0)?),
+                    user_id: row.get(1)?,
+                    key: row.get(2)?,
+                    value: row.get(3)?,
+                    source: row.get(4)?,
+                    created_at: Some(row.get(5)?),
+                    updated_at: Some(row.get(6)?),
+                })
+            })?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(MemoryError::Db)
+        })
     }
 
     /// Insert or update a memory fact.
@@ -170,34 +175,37 @@ impl MemoryManager {
         value: &str,
         source: &str,
     ) -> Result<(), MemoryError> {
-        let conn = self.db.lock().expect("db mutex poisoned");
-        conn.execute(
-            "INSERT INTO memories (user_id, key, value, source, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, datetime('now'), datetime('now'))
-             ON CONFLICT(user_id, key) DO UPDATE SET
-                 value = ?3, source = ?4, updated_at = datetime('now')",
-            rusqlite::params![user_id, key, value, source],
-        )?;
-        Ok(())
+        self.with_db(|conn| {
+            conn.execute(
+                "INSERT INTO memories (user_id, key, value, source, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, datetime('now'), datetime('now'))
+                 ON CONFLICT(user_id, key) DO UPDATE SET
+                     value = ?3, source = ?4, updated_at = datetime('now')",
+                rusqlite::params![user_id, key, value, source],
+            )?;
+            Ok(())
+        })
     }
 
     /// Delete a single memory fact. Returns `true` if a row was deleted.
     pub fn delete(&self, user_id: &str, key: &str) -> Result<bool, MemoryError> {
-        let conn = self.db.lock().expect("db mutex poisoned");
-        let n = conn.execute(
-            "DELETE FROM memories WHERE user_id = ?1 AND key = ?2",
-            rusqlite::params![user_id, key],
-        )?;
-        Ok(n > 0)
+        self.with_db(|conn| {
+            let n = conn.execute(
+                "DELETE FROM memories WHERE user_id = ?1 AND key = ?2",
+                rusqlite::params![user_id, key],
+            )?;
+            Ok(n > 0)
+        })
     }
 
     /// Delete all memory facts for a user. Returns number of rows deleted.
     pub fn clear(&self, user_id: &str) -> Result<usize, MemoryError> {
-        let conn = self.db.lock().expect("db mutex poisoned");
-        let n = conn.execute(
-            "DELETE FROM memories WHERE user_id = ?1",
-            rusqlite::params![user_id],
-        )?;
-        Ok(n)
+        self.with_db(|conn| {
+            let n = conn.execute(
+                "DELETE FROM memories WHERE user_id = ?1",
+                rusqlite::params![user_id],
+            )?;
+            Ok(n)
+        })
     }
 }

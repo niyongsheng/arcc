@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-ARCC (AI Rust Claude CLI) — 基于 Rust 2024 的终端常驻通用 AI Agent，以 DeepSeek-V4 为核心推理底座，全量兼容 MCP（Model Context Protocol）协议。目标：7×24 小时后台守护、不限编程语言场景的高性能自动化执行环境。
+ARCC (A Rust Copilot CLI) — 基于 Rust 2024 的终端常驻通用 AI Agent，以 DeepSeek-V4 为核心推理底座，全量兼容 MCP（Model Context Protocol）协议。目标：7×24 小时后台守护、不限编程语言场景的高性能自动化执行环境。
 
 ## Git 约定
 

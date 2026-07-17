@@ -23,6 +23,16 @@ pub struct ArccStorage {
 }
 
 impl ArccStorage {
+    /// Acquire the database mutex and pass the connection to `f`.
+    ///
+    /// Replaces the `lock().expect("db mutex poisoned")` boilerplate that
+    /// was copy-pasted across 20 query methods — now the poisoned case
+    /// is a proper error instead of a panic.
+    fn with_db<T>(&self, f: impl FnOnce(&rusqlite::Connection) -> Result<T, StorageError>) -> Result<T, StorageError> {
+        let conn = self.db.lock().map_err(|_| StorageError::Poisoned)?;
+        f(&conn)
+    }
+
     /// Bootstrap the storage layer from the ARCC home directory.
     pub fn init(home: &Path) -> Result<Self, StorageError> {
         std::fs::create_dir_all(home).ok();
@@ -56,8 +66,7 @@ impl ArccStorage {
 
     /// List the most recent sessions.
     pub fn list_sessions(&self, limit: usize) -> Result<Vec<Session>, StorageError> {
-        let conn = self.db.lock().expect("db mutex poisoned");
-        Ok(queries::list_sessions(&conn, limit)?)
+        self.with_db(|conn| Ok(queries::list_sessions(conn, limit)?))
     }
 
     /// Get messages for a session.
@@ -66,8 +75,7 @@ impl ArccStorage {
         session_id: &str,
         limit: usize,
     ) -> Result<Vec<Message>, StorageError> {
-        let conn = self.db.lock().expect("db mutex poisoned");
-        Ok(queries::session_messages(&conn, session_id, limit)?)
+        self.with_db(|conn| Ok(queries::session_messages(conn, session_id, limit)?))
     }
 
     /// Token usage aggregated by day and model, for the last N days.
@@ -75,20 +83,17 @@ impl ArccStorage {
         &self,
         days: usize,
     ) -> Result<Vec<queries::TokenUsageRow>, StorageError> {
-        let conn = self.db.lock().expect("db mutex poisoned");
-        Ok(queries::token_usage_daily(&conn, days)?)
+        self.with_db(|conn| Ok(queries::token_usage_daily(conn, days)?))
     }
 
     /// Total token counts for the last N days.
     pub fn total_tokens(&self, days: usize) -> Result<(i64, i64), StorageError> {
-        let conn = self.db.lock().expect("db mutex poisoned");
-        Ok(queries::total_tokens(&conn, days)?)
+        self.with_db(|conn| Ok(queries::total_tokens(conn, days)?))
     }
 
     /// Count total messages across all sessions.
     pub fn message_count(&self) -> Result<i64, StorageError> {
-        let conn = self.db.lock().expect("db mutex poisoned");
-        Ok(queries::count_messages(&conn)?)
+        self.with_db(|conn| Ok(queries::count_messages(conn)?))
     }
 
     /// Record (or accumulate) token usage for a session + model on today's date.
@@ -99,14 +104,12 @@ impl ArccStorage {
         input_tokens: i64,
         output_tokens: i64,
     ) -> Result<(), StorageError> {
-        let conn = self.db.lock().expect("db mutex poisoned");
-        Ok(queries::upsert_token_usage(&conn, session_id, model, input_tokens, output_tokens)?)
+        self.with_db(|conn| Ok(queries::upsert_token_usage(conn, session_id, model, input_tokens, output_tokens)?))
     }
 
     /// Latest summary for a session.
     pub fn latest_summary(&self, session_id: &str) -> Result<Option<Summary>, StorageError> {
-        let conn = self.db.lock().expect("db mutex poisoned");
-        Ok(queries::latest_summary(&conn, session_id)?)
+        self.with_db(|conn| Ok(queries::latest_summary(conn, session_id)?))
     }
 
     /// Read the most recent N audit events.
@@ -120,8 +123,7 @@ impl ArccStorage {
         session_id: &str,
         summary: &str,
     ) -> Result<(), StorageError> {
-        let conn = self.db.lock().expect("db mutex poisoned");
-        Ok(queries::update_session_summary(&conn, session_id, summary)?)
+        self.with_db(|conn| Ok(queries::update_session_summary(conn, session_id, summary)?))
     }
 
     /// Record a user prompt in the input history.
@@ -130,22 +132,19 @@ impl ArccStorage {
         session_id: &str,
         prompt: &str,
     ) -> Result<(), StorageError> {
-        let conn = self.db.lock().expect("db mutex poisoned");
-        Ok(queries::insert_input_history(&conn, session_id, prompt)?)
+        self.with_db(|conn| Ok(queries::insert_input_history(conn, session_id, prompt)?))
     }
 
     /// List the most recent N input history entries.
     pub fn recent_input_history(&self, limit: usize) -> Result<Vec<InputHistoryEntry>, StorageError> {
-        let conn = self.db.lock().expect("db mutex poisoned");
-        Ok(queries::list_input_history(&conn, limit)?)
+        self.with_db(|conn| Ok(queries::list_input_history(conn, limit)?))
     }
 
     // ── Memory (memories table) ─────────────────────────────────────
 
     /// List all memory facts for a user.
     pub fn list_memories(&self, user_id: &str) -> Result<Vec<MemoryFact>, StorageError> {
-        let conn = self.db.lock().expect("db mutex poisoned");
-        Ok(queries::list_memories(&conn, user_id)?)
+        self.with_db(|conn| Ok(queries::list_memories(conn, user_id)?))
     }
 
     /// Insert or update a memory fact.
@@ -156,76 +155,64 @@ impl ArccStorage {
         value: &str,
         source: &str,
     ) -> Result<(), StorageError> {
-        let conn = self.db.lock().expect("db mutex poisoned");
-        Ok(queries::upsert_memory(&conn, user_id, key, value, source)?)
+        self.with_db(|conn| Ok(queries::upsert_memory(conn, user_id, key, value, source)?))
     }
 
     /// Delete a single memory fact. Returns `true` if deleted.
     pub fn delete_memory(&self, user_id: &str, key: &str) -> Result<bool, StorageError> {
-        let conn = self.db.lock().expect("db mutex poisoned");
-        Ok(queries::delete_memory(&conn, user_id, key)?)
+        self.with_db(|conn| Ok(queries::delete_memory(conn, user_id, key)?))
     }
 
     /// Delete all memory facts for a user. Returns number of rows deleted.
     pub fn clear_memories(&self, user_id: &str) -> Result<usize, StorageError> {
-        let conn = self.db.lock().expect("db mutex poisoned");
-        Ok(queries::clear_memories(&conn, user_id)?)
+        self.with_db(|conn| Ok(queries::clear_memories(conn, user_id)?))
     }
 
     // ── Scheduled tasks ──────────────────────────────────
 
     /// Create a new scheduled task.
     pub fn create_scheduled_task(&self, task: &ScheduledTask) -> Result<(), StorageError> {
-        let conn = self.db.lock().expect("db mutex poisoned");
-        Ok(queries::create_scheduled_task(&conn, task)?)
+        self.with_db(|conn| Ok(queries::create_scheduled_task(conn, task)?))
     }
 
     /// List all pending tasks whose `next_run_at` has passed.
     pub fn list_due_tasks(&self) -> Result<Vec<ScheduledTask>, StorageError> {
-        let conn = self.db.lock().expect("db mutex poisoned");
-        Ok(queries::list_due_tasks(&conn)?)
+        self.with_db(|conn| Ok(queries::list_due_tasks(conn)?))
     }
 
     /// Update the status of a scheduled task.
     pub fn update_task_status(&self, id: &str, status: &str) -> Result<(), StorageError> {
-        let conn = self.db.lock().expect("db mutex poisoned");
-        Ok(queries::update_task_status(&conn, id, status)?)
+        self.with_db(|conn| Ok(queries::update_task_status(conn, id, status)?))
     }
 
     /// Mark a scheduled task as completed, recording `last_run_at` as now.
     pub fn complete_task(&self, id: &str) -> Result<(), StorageError> {
-        let conn = self.db.lock().expect("db mutex poisoned");
-        Ok(queries::complete_task(&conn, id)?)
+        self.with_db(|conn| Ok(queries::complete_task(conn, id)?))
     }
 
     /// Update the next_run_at timestamp for a recurring task.
     pub fn update_task_next_run(&self, id: &str, next_run_at: &str) -> Result<(), StorageError> {
-        let conn = self.db.lock().expect("db mutex poisoned");
-        Ok(queries::update_task_next_run(&conn, id, next_run_at)?)
+        self.with_db(|conn| Ok(queries::update_task_next_run(conn, id, next_run_at)?))
     }
 
     /// List active scheduled tasks for a chat_id.
     pub fn list_tasks_by_user(&self, chat_id: &str) -> Result<Vec<ScheduledTask>, StorageError> {
-        let conn = self.db.lock().expect("db mutex poisoned");
-        Ok(queries::list_tasks_by_user(&conn, chat_id)?)
+        self.with_db(|conn| Ok(queries::list_tasks_by_user(conn, chat_id)?))
     }
 
     /// Delete a scheduled task. Returns `true` if deleted.
     pub fn delete_task(&self, id: &str) -> Result<bool, StorageError> {
-        let conn = self.db.lock().expect("db mutex poisoned");
-        Ok(queries::delete_task(&conn, id)?)
+        self.with_db(|conn| Ok(queries::delete_task(conn, id)?))
     }
 
     /// Pause a scheduled task (scheduler will skip it).
     pub fn pause_task(&self, id: &str) -> Result<(), StorageError> {
-        let conn = self.db.lock().expect("db mutex poisoned");
-        Ok(queries::pause_task(&conn, id)?)
+        self.with_db(|conn| Ok(queries::pause_task(conn, id)?))
     }
 
     /// Resume a paused task.
     pub fn resume_task(&self, id: &str) -> Result<(), StorageError> {
-        let conn = self.db.lock().expect("db mutex poisoned");
-        Ok(queries::resume_task(&conn, id)?)
+        self.with_db(|conn| Ok(queries::resume_task(conn, id)?))
     }
 
     /// Shortcut: init from the default home (`~/.arcc/`).
@@ -261,4 +248,7 @@ pub enum StorageError {
     Config(#[from] config::loader::ConfigError),
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+    /// Mutex was poisoned — another thread panicked while holding the lock.
+    #[error("db mutex poisoned")]
+    Poisoned,
 }

@@ -73,6 +73,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Wait for tag to be discoverable
         env:
@@ -92,6 +94,22 @@ jobs:
           echo "Tag $TAG never became discoverable via API"
           exit 1
 
+      - name: Generate changelog
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          PREV_TAG=$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || echo "")
+          {
+            echo "## What's Changed"
+            echo ""
+            if [ -n "$PREV_TAG" ]; then
+              echo "Changes since $PREV_TAG:"
+              echo ""
+              git log --oneline --no-decorate "${PREV_TAG}..$TAG"
+            else
+              git log --oneline --no-decorate "$TAG"
+            fi
+          } > changelog.md
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
 
@@ -106,31 +124,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
-          echo "Creating release for $TAG..."
 
-          # Create the release via API for reliability with tag eventual consistency
-          RELEASE_JSON=$(gh api \
-            --method POST \
-            "repos/${{ github.repository }}/releases" \
-            -f "tag_name=$TAG" \
-            -f "name=ARCC $TAG" \
-            -f "body=ARCC $TAG Release — Three-in-One Personal AI Assistant" \
-            -F "draft=true" \
-            -F "generate_release_notes=true")
-
-          RELEASE_ID=$(echo "$RELEASE_JSON" | jq -r '.id')
-          UPLOAD_URL=$(echo "$RELEASE_JSON" | jq -r '.upload_url' | sed 's/{?name,label}//')
-          echo "Release created: ID=$RELEASE_ID"
-
-          # Upload assets
+          # Collect assets
+          ASSETS=()
           for asset in arcc-*/arcc-*.tar.gz checksums.txt; do
-            echo "Uploading $asset..."
-            gh api \
-              --method POST \
-              "$UPLOAD_URL" \
-              -f "name=$(basename "$asset")" \
-              --input "$asset" \
-              --header "Content-Type: application/octet-stream" \
-              -H "Accept: application/vnd.github+json" > /dev/null
+            [ -f "$asset" ] && ASSETS+=("$asset")
           done
-          echo "All assets uploaded successfully!"
+
+          gh release create "$TAG" \
+            --title "ARCC $TAG" \
+            --notes-file changelog.md \
+            --draft \
+            --generate-notes \
+            "${ASSETS[@]}"

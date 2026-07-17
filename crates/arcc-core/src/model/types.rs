@@ -13,6 +13,49 @@ pub struct ChatMessage {
     pub reasoning_content: Option<String>,
 }
 
+impl ChatMessage {
+    /// Create a plain text message with the given role.
+    ///
+    /// Shorthand for the `{ tool_calls: None, tool_call_id: None,
+    /// reasoning_content: None }` boilerplate that appears 30+ times
+    /// across the codebase.
+    pub fn new(role: &str, content: String) -> Self {
+        Self {
+            role: role.to_owned(),
+            content,
+            tool_calls: None,
+            tool_call_id: None,
+            reasoning_content: None,
+        }
+    }
+
+    /// Convenience constructor for system messages.
+    pub fn system(content: String) -> Self {
+        Self::new("system", content)
+    }
+
+    /// Convenience constructor for user messages.
+    pub fn user(content: String) -> Self {
+        Self::new("user", content)
+    }
+
+    /// Convenience constructor for assistant messages.
+    pub fn assistant(content: String) -> Self {
+        Self::new("assistant", content)
+    }
+
+    /// Create a tool-role message (matching a previous assistant tool_call).
+    pub fn tool_result(tool_call_id: String, content: String) -> Self {
+        Self {
+            role: "tool".to_owned(),
+            content,
+            tool_calls: None,
+            tool_call_id: Some(tool_call_id),
+            reasoning_content: None,
+        }
+    }
+}
+
 /// Tool call request (compatible with MCP).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {

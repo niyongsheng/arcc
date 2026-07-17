@@ -1,5 +1,5 @@
 ## Project Overview
-ARCC (AI Rust Claude CLI) is a personal AI assistant that provides three interfaces—TUI, CLI, and HTTP server—for interacting with DeepSeek language models. Built in Rust (edition 2024), it focuses on developer workflows: interactive coding assistance, one-shot pipelines, and automated agent-to-agent communication. The system includes a configurable safety engine, session context compression, a model-agnostic tool executor (MCP and shell), and persistent storage via SQLite. Target audience: developers wanting a local, offline-capable AI coding partner with command-line and TUI integration.
+ARCC (A Rust Copilot CLI) is a personal AI assistant that provides three interfaces—TUI, CLI, and HTTP server—for interacting with DeepSeek language models. Built in Rust (edition 2024), it focuses on developer workflows: interactive coding assistance, one-shot pipelines, and automated agent-to-agent communication. The system includes a configurable safety engine, session context compression, a model-agnostic tool executor (MCP and shell), and persistent storage via SQLite. Target audience: developers wanting a local, offline-capable AI coding partner with command-line and TUI integration.
 
 ## Quick Start
 Copy-paste to build, test, and run:

@@ -45,13 +45,7 @@ impl ModelProvider for MockProvider {
 
         let tokens = response.len() / 3;
         Ok(ChatResponse {
-            message: ChatMessage {
-                role: "assistant".into(),
-                content: response,
-                tool_calls: None,
-                tool_call_id: None,
-                reasoning_content: None,
-            },
+            message: ChatMessage::assistant(response),
             reasoning_content: None,
             usage: Usage {
                 prompt_tokens: user_input.len() as u32 / 3,

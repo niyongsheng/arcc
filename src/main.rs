@@ -10,7 +10,7 @@ use arcc_core::model::mock::MockProvider;
 use arcc_core::model::registry::ProviderRegistry;
 
 #[derive(Parser)]
-#[command(name = "arcc", about = "AI Rust Claude CLI", version)]
+#[command(name = "arcc", about = "A Rust Copilot CLI", version)]
 struct Cli {
     /// Bypass command allowlist (DANGEROUS: allows all shell commands)
     #[arg(long, global = true, hide = true, alias = "unsafe")]
@@ -57,8 +57,10 @@ fn init_tracing(mode: &str) -> Option<WorkerGuard> {
 
     match mode {
         "tui" => {
+            let log_dir = arcc_home_log_dir();
+            std::fs::create_dir_all(&log_dir).ok();
             let log_path = std::env::var("ARCC_LOG")
-                .unwrap_or_else(|_| "/tmp/arcc-tui.log".into());
+                .unwrap_or_else(|_| format!("{}/tui.log", log_dir));
             let file = std::fs::File::create(&log_path).expect("create log file");
             tracing_subscriber::registry()
                 .with(filter)

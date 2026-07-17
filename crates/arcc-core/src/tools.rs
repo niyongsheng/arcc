@@ -251,6 +251,25 @@ pub struct CommandOutput {
     pub truncated: bool,
 }
 
+impl CommandOutput {
+    /// Merge stdout and stderr into a single string suitable for LLM consumption.
+    ///
+    /// When stderr is empty, returns stdout verbatim.  Otherwise prepends
+    /// the exit code and labels both streams so the model can distinguish
+    /// them — this eliminates the `if stderr.is_empty() { ... } else { ... }`
+    /// pattern that was copy-pasted across 4 call sites.
+    pub fn to_content(&self) -> String {
+        if self.stderr.is_empty() {
+            self.stdout.clone()
+        } else {
+            format!(
+                "exit_code: {:?}\nstdout:\n{}\nstderr:\n{}",
+                self.exit_code, self.stdout, self.stderr,
+            )
+        }
+    }
+}
+
 /// Execute a command via piped stdio (default, no TTY).
 ///
 /// 1. Check for dangerous commands (`require_human_confirm` list).

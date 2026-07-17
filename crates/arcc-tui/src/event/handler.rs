@@ -17,8 +17,6 @@ use super::loop_event::AppEvent;
 pub fn spawn_input_handler(tx: mpsc::UnboundedSender<AppEvent>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         loop {
-            tokio::task::yield_now().await;
-
             if !event::poll(std::time::Duration::from_millis(10)).unwrap_or(false) {
                 continue;
             }

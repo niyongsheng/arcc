@@ -94,13 +94,7 @@ pub async fn run(
 
     let mut messages = vec![
         system_msg,
-        ChatMessage {
-            role: "user".into(),
-            content: prompt.to_owned(),
-            tool_calls: None,
-            tool_call_id: None,
-            reasoning_content: None,
-        },
+        ChatMessage::user(prompt.to_owned()),
     ];
 
     info!(model = %provider.model_name(), "CLI tool-calling stream");
@@ -240,21 +234,8 @@ pub async fn run(
 
             match executed {
                 Ok(output) => {
-                    let content = if output.stderr.is_empty() {
-                        output.stdout.clone()
-                    } else {
-                        format!(
-                            "exit_code: {:?}\nstdout:\n{}\nstderr:\n{}",
-                            output.exit_code, output.stdout, output.stderr
-                        )
-                    };
-                    messages.push(ChatMessage {
-                        role: "tool".into(),
-                        content,
-                        tool_calls: None,
-                        tool_call_id: Some(tc.id.clone()),
-                        reasoning_content: None,
-                    });
+                    let content = output.to_content();
+                    messages.push(ChatMessage::tool_result(tc.id.clone(), content));
                     if json_mode {
                         json_tool_calls.push(ToolResult {
                             command: command.clone(),
@@ -290,13 +271,7 @@ pub async fn run(
                     } else {
                         eprintln!("error: {e}");
                     }
-                    messages.push(ChatMessage {
-                        role: "tool".into(),
-                        content: format!("error: {e}"),
-                        tool_calls: None,
-                        tool_call_id: Some(tc.id.clone()),
-                        reasoning_content: None,
-                    });
+                    messages.push(ChatMessage::tool_result(tc.id.clone(), format!("error: {e}")));
                 }
             }
         }

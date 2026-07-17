@@ -16,16 +16,8 @@ async fn test_tool_call_stream() {
     let req = ChatRequest {
         model: "deepseek-chat".into(),
         messages: vec![
-            ChatMessage {
-                role: "system".into(),
-                content: "You are ARCC. Use execute_command tool. Always use it for system queries.".into(),
-                tool_calls: None, tool_call_id: None, reasoning_content: None,
-            },
-            ChatMessage {
-                role: "user".into(),
-                content: "当前网络状态".into(),
-                tool_calls: None, tool_call_id: None, reasoning_content: None,
-            },
+            ChatMessage::system("You are ARCC. Use execute_command tool. Always use it for system queries.".into()),
+            ChatMessage::user("当前网络状态".into()),
         ],
         tools: Some(vec![tools::command_tool_definition()]),
         tool_choice: Some(serde_json::json!("auto")),

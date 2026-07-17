@@ -191,30 +191,31 @@ impl App {
         self.character_index -= 1;
     }
 
+    /// Whether the user can edit the input buffer.
+    ///
+    /// During EXECUTING the subprocess has stdin — stray keystrokes from
+    /// /dev/tty leaks (e.g. sudo prompts) must be discarded.
+    fn can_edit(&self) -> bool {
+        self.status == components::status::IDLE
+            || self.status == components::status::THINKING
+            || self.status == components::status::STREAMING
+    }
+
     fn handle_event(&mut self, event: AppEvent) {
         match event {
             AppEvent::Input(ch) if ch == "\n" || ch == "\r" => {}
             AppEvent::Input(ch) if ch == "\x08" || ch == "\x7f" => {
-                if self.status == components::status::IDLE
-                    || self.status == components::status::THINKING
-                    || self.status == components::status::STREAMING
-                {
+                if self.can_edit() {
                     self.delete_char();
                 }
             }
             AppEvent::Input(ch) if ch == "\x1b[D" => {
-                if self.status == components::status::IDLE
-                    || self.status == components::status::THINKING
-                    || self.status == components::status::STREAMING
-                {
+                if self.can_edit() {
                     self.character_index = self.character_index.saturating_sub(1);
                 }
             }
             AppEvent::Input(ch) if ch == "\x1b[C" => {
-                if self.status == components::status::IDLE
-                    || self.status == components::status::THINKING
-                    || self.status == components::status::STREAMING
-                {
+                if self.can_edit() {
                     let max = self.input_buffer.chars().count();
                     if self.character_index < max {
                         self.character_index += 1;
@@ -484,13 +485,7 @@ impl App {
                     self.session.read().await.id.clone()
                 })
             });
-            let user_msg = ChatMessage {
-                role: "user".into(),
-                content: format!("Plan the following task:\n\n{task}"),
-                tool_calls: None,
-                tool_call_id: None,
-                reasoning_content: None,
-            };
+            let user_msg = ChatMessage::user(format!("Plan the following task:\n\n{task}"));
             {
                 let mut s = tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current().block_on(self.session.write())
@@ -605,13 +600,7 @@ impl App {
                 self.session.read().await.id.clone()
             })
         });
-        let user_msg = ChatMessage {
-            role: "user".into(),
-            content: prompt.clone(),
-            tool_calls: None,
-            tool_call_id: None,
-            reasoning_content: None,
-        };
+        let user_msg = ChatMessage::user(prompt.clone());
         {
             let mut s = tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(self.session.write())
@@ -698,16 +687,16 @@ impl App {
                 }
             }
             "clear" => {
-                info!("session cleared");
+                info!("session cleared — new UUID");
                 if let Some(pending) = self.pending_prompt.take() {
                     let _ = pending.response_tx.send(None);
                 }
                 self.messages.clear();
                 self.reasoning_content.clear();
-                // Clear session messages in memory — DB records (if any)
-                // are kept as historical audit log.
+                // Create a new session with a fresh UUID so the AI sees
+                // zero prior context.  DB persistence is preserved.
                 if let Ok(mut s) = self.session.try_write() {
-                    s.clear_messages();
+                    s.reset(&uuid::Uuid::new_v4().to_string());
                 }
             }
             "model" => {
@@ -773,9 +762,7 @@ impl App {
 
                 match result {
                     Ok(out) => {
-                        let content = if out.stderr.is_empty() { out.stdout } else {
-                            format!("exit_code: {:?}\nstdout:\n{}\nstderr:\n{}", out.exit_code, out.stdout, out.stderr)
-                        };
+                        let content = out.to_content();
                         self.messages.push(format!("⚡ exit={:?}\n```\n{content}\n```", out.exit_code));
                     }
                     Err(e) => {
@@ -843,7 +830,7 @@ impl App {
                 if path.exists() {
                     let (resp_tx, resp_rx) = oneshot::channel();
                     let _ = self.event_tx.send(AppEvent::Prompt(PromptRequest {
-                        message: cow_say("Overwrite ARCC.md?", "[y] yes · [n] no"),
+                        message: "**[y]** yes · **[n]** no — Overwrite ARCC.md?".into(),
                         hint: String::new(),
                         response_tx: resp_tx,
                     }));
@@ -1347,7 +1334,7 @@ async fn run_tool_calling_loop(
                 if needs_confirm {
                     let (resp_tx, resp_rx) = oneshot::channel();
                     let _ = tx.send(AppEvent::Prompt(PromptRequest {
-                        message: cow_say(&command, "[y] approve · [a] allow always · [n] reject"),
+                        message: format!("**[y]** approve · **[a]** allow always · **[n]** reject — `{command}`"),
                         hint: "**[y]** approve · **[a]** allow always · **[n]** reject".into(),
                         response_tx: resp_tx,
                     }));
@@ -1413,33 +1400,16 @@ async fn run_tool_calling_loop(
 
             match executed {
                 Ok(output) => {
-                    let content = if output.stderr.is_empty() {
-                        output.stdout
-                    } else {
-                        format!("exit_code: {:?}\nstdout:\n{}\nstderr:\n{}",
-                            output.exit_code, output.stdout, output.stderr)
-                    };
+                    let content = output.to_content();
                     let tokens = provider.count_tokens(&content);
                     let mut s = session.write().await;
-                    s.push_message(ChatMessage {
-                        role: "tool".into(),
-                        content,
-                        tool_calls: None,
-                        tool_call_id: Some(tc.id.clone()),
-                        reasoning_content: None,
-                    }, tokens);
+                    s.push_message(ChatMessage::tool_result(tc.id.clone(), content), tokens);
                     let _ = tx.send(AppEvent::ToolExec(format!(
                         "{command} → exit={:?}", output.exit_code)));
                 }
                 Err(e) => {
                     let mut s = session.write().await;
-                    s.push_message(ChatMessage {
-                        role: "tool".into(),
-                        content: format!("error: {e}"),
-                        tool_calls: None,
-                        tool_call_id: Some(tc.id.clone()),
-                        reasoning_content: None,
-                    }, 0);
+                    s.push_message(ChatMessage::tool_result(tc.id.clone(), format!("error: {e}")), 0);
                     let _ = tx.send(AppEvent::ToolExec(format!("{command}: {e}")));
                 }
             }
@@ -1450,14 +1420,7 @@ async fn run_tool_calling_loop(
             let s = session.read().await;
             let mut base = s.prepare_for_request(config.thinking_mode);
             base.retain(|m| m.role != "system");
-            std::iter::once(ChatMessage {
-                role: "system".into(),
-                content: config.system_content.clone(),
-                tool_calls: None,
-                tool_call_id: None,
-                reasoning_content: None,
-            })
-            .chain(base)
+            std::iter::once(ChatMessage::system(config.system_content.clone())).chain(base)
             .collect()
         };
         phase = 2;
@@ -1467,18 +1430,6 @@ async fn run_tool_calling_loop(
 // ---------------------------------------------------------------------------
 // Cow prompt helper — reusable ASCII art for confirmation dialogs
 // ---------------------------------------------------------------------------
-
-fn cow_say(title: &str, hint: &str) -> String {
-    let sep = "‑".repeat(title.chars().count() + 2).replace('‑', "-");
-    let cow = format!(
-        "< {title} >\n{sep}\n  \\   ^__^\n   \\  (oo)\\_______\n      (__)\\       )\\/\\\n          ||----w |\n          ||     ||"
-    );
-    if hint.is_empty() {
-        format!("```\n{cow}\n```")
-    } else {
-        format!("```\n{cow}\n{hint}\n```")
-    }
-}
 
 // ---------------------------------------------------------------------------
 // run_project_init — probe project and generate ARCC.md via AI
@@ -1556,16 +1507,8 @@ Write ONLY the ARCC.md content, no extra commentary, no section if it would be e
     let _ = tx.send(AppEvent::Status(components::status::EXECUTING.into()));
 
     if let Some(prov) = provider {
-        let init_system = arcc_core::model::types::ChatMessage {
-            role: "system".into(),
-            content: init_system_content.into(),
-            tool_calls: None, tool_call_id: None, reasoning_content: None,
-        };
-        let user_msg = arcc_core::model::types::ChatMessage {
-            role: "user".into(),
-            content: format!("Generate an ARCC.md for this project:\n\n{probe_text}"),
-            tool_calls: None, tool_call_id: None, reasoning_content: None,
-        };
+        let init_system = arcc_core::model::types::ChatMessage::system(init_system_content.into());
+        let user_msg = arcc_core::model::types::ChatMessage::user(format!("Generate an ARCC.md for this project:\n\n{probe_text}"));
         let req = arcc_core::model::types::ChatRequest {
             model: prov.model_name().to_owned(),
             messages: vec![init_system, user_msg],

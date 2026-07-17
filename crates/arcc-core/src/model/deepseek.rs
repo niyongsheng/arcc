@@ -744,13 +744,7 @@ mod tests {
     fn test_tool_request_serialization() {
         let req = ChatRequest {
             model: "deepseek-v4-pro".into(),
-            messages: vec![ChatMessage {
-                role: "user".into(),
-                content: "当前目录有什么文件".into(),
-                tool_calls: None,
-                tool_call_id: None,
-                reasoning_content: None,
-            }],
+            messages: vec![ChatMessage::user("当前目录有什么文件".into())],
             tools: Some(vec![tools::command_tool_definition()]),
             tool_choice: Some(serde_json::json!("auto")),
             temperature: Some(0.7),

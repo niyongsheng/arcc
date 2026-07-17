@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ARCC Design Tokens</title>
+  <style>
+    :root {
+      --bg:        #0d0d0c;
+      --bg-elev:   #141413;
+      --bg-card:   #1a1a18;
+      --bg-hover:  #222220;
+      --border:    #2a2a27;
+      --text:      #e8e6e0;
+      --text-dim:  #8e8b82;
+      --text-muted:#6c6a64;
+      --accent:    #FF5722;
+      --accent2:   #5db8a6;
+      --green:     #5db872;
+      --yellow:    #d4a017;
+      --red:       #c64545;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: "JetBrains Mono", "Cascadia Code", "Fira Code", ui-monospace, monospace;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.7;
+      padding: 40px 24px;
+      font-size: 13px;
+    }
+    ::selection { background: var(--accent); color: #fff; }
+
+    .container { max-width: 1200px; margin: 0 auto; }
+
+    /* ── Header ── */
+    h1 {
+      font-family: "Inter", -apple-system, sans-serif;
+      font-size: 28px; font-weight: 600;
+      color: var(--accent);
+      margin-bottom: 4px;
+      letter-spacing: -0.3px;
+    }
+    h1::before { content: "$ "; color: var(--green); font-weight: 400; }
+    .sub {
+      color: var(--text-dim);
+      font-size: 13px;
+      margin-bottom: 40px;
+      padding-left: 22px;
+      border-left: 2px solid var(--border);
+    }
+
+    /* ── Section titles ── */
+    h2 {
+      font-family: "Inter", -apple-system, sans-serif;
+      font-size: 18px; font-weight: 500;
+      color: var(--accent2);
+      margin: 48px 0 20px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+    h2::before { content: "## "; color: var(--text-muted); }
+    h3 {
+      font-size: 13px; font-weight: 500;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 1.2px;
+      margin: 24px 0 12px;
+    }
+
+    p, li { font-size: 13px; line-height: 1.7; color: var(--text-dim); }
+
+    .grid { display: grid; gap: 10px; }
+
+    /* ── Color swatches ── */
+    .color-grid { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+    .swatch {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 14px;
+    }
+    .swatch-preview {
+      height: 48px;
+      border-radius: 4px;
+      margin-bottom: 10px;
+    }
+    .swatch-name { font-size: 12px; font-weight: 500; }
+    .swatch-hex { font-size: 11px; color: var(--text-muted); }
+
+    /* ── Tables ── */
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td {
+      text-align: left;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    th {
+      color: var(--text-muted);
+      font-weight: 500;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    tr:hover td { background: var(--bg-hover); }
+    .token-ref { color: var(--accent); }
+
+    /* ── Font previews ── */
+    .font-display { font-family: "Copernicus", "Tiempos Headline", "Cormorant Garamond", serif; }
+    .font-body    { font-family: "StyreneB", "Inter", -apple-system, sans-serif; }
+    .font-mono    { font-family: "JetBrains Mono", "Cascadia Code", "Fira Code", ui-monospace, monospace; }
+
+    /* ── Spacing visual ── */
+    .spacing-block {
+      background: var(--accent);
+      border-radius: 3px;
+      flex-shrink: 0;
+      height: 14px;
+    }
+    .spacing-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 6px 0;
+    }
+    .spacing-label { width: 130px; flex-shrink: 0; font-size: 12px; }
+    .spacing-val  { color: var(--text-muted); font-size: 11px; width: 60px; }
+    .spacing-bar  { flex: 1; max-width: 200px; }
+
+    /* ── Radius demo ── */
+    .radius-demo { display: flex; gap: 16px; flex-wrap: wrap; }
+    .radius-box {
+      width: 56px; height: 56px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      display: flex;
+      align-items: center; justify-content: center;
+      font-size: 9px; color: var(--text-muted);
+    }
+    .radius-label { text-align: center; font-size: 11px; margin-top: 4px; }
+
+    /* ── Component cards ── */
+    .component-grid { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+    .component-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 16px;
+    }
+    .component-label { font-size: 12px; font-weight: 500; margin-bottom: 2px; }
+    .component-desc  { font-size: 11px; color: var(--text-muted); margin-bottom: 12px; }
+
+    /* ── Inline preview cards ── */
+    .preview-card {
+      border-radius: 6px; padding: 20px;
+      margin: 8px 0;
+    }
+    .preview-card.cream { background: #efe9de; color: #141413; }
+    .preview-card.dark  { background: #181715; color: #faf9f5; }
+    .preview-card.coral { background: #FF5722; color: #ffffff; }
+    .preview-card .card-title { font-size: 15px; font-weight: 500; margin-bottom: 6px; }
+    .preview-card .card-body  { font-size: 12px; opacity: 0.85; }
+
+    /* ── Buttons ── */
+    .btn-group { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; }
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      font-family: "StyreneB", "Inter", -apple-system, sans-serif;
+      font-size: 12px; font-weight: 500; line-height: 1;
+      padding: 10px 18px; height: 36px;
+      border-radius: 6px; border: none; cursor: default;
+    }
+    .btn-primary { background: #FF5722; color: #fff; }
+    .btn-secondary { background: #0d0d0c; color: #e8e6e0; border: 1px solid #2a2a27; }
+    .btn-dark { background: #252320; color: #faf9f5; }
+
+    /* ── Tags ── */
+    .tag-group { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+    .tag {
+      display: inline-block; padding: 3px 10px; border-radius: 9999px;
+      font-size: 11px; font-weight: 500;
+    }
+    .tag-default { background: #252320; color: #e8e6e0; }
+    .tag-coral   { background: #FF5722; color: #fff; }
+    .tag-coral-up {
+      background: #FF5722; color: #fff;
+      font-size: 10px; font-weight: 500; letter-spacing: 1.5px;
+      text-transform: uppercase;
+    }
+
+    /* ── Input preview ── */
+    .input-preview {
+      max-width: 320px; margin-bottom: 16px;
+    }
+    .input-preview > div {
+      background: #0d0d0c;
+      border: 1px solid #2a2a27;
+      border-radius: 6px;
+      padding: 9px 12px; height: 36px;
+      font-size: 12px; color: #6c6a64;
+      display: flex; align-items: center;
+    }
+
+    /* ── Code block ── */
+    pre.code-block {
+      background: #000;
+      color: #d4d0c8;
+      padding: 20px;
+      border-radius: 6px;
+      overflow-x: auto;
+      font-size: 12px;
+      line-height: 1.6;
+      border: 1px solid #1a1a18;
+    }
+
+    /* ── Meta footer ── */
+    .meta {
+      color: var(--text-muted);
+      font-size: 11px;
+      margin-top: 48px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border);
+    }
+    .meta strong { color: var(--text-dim); }
+
+    /* ── Scrollbar ── */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+  </style>
+</head>
+<body>
+<div class="container">
+
+  <h1>ARCC Design Tokens</h1>
+  <p class="sub">Claude-design-analysis · v1-alpha · warm-canvas editorial system, extracted for CLI-tool reference</p>
+
+  <!-- ================================================================== -->
+  <h2>Colors</h2>
+
+  <h3>Brand &amp; Accent</h3>
+  <div class="grid color-grid">
+    <div class="swatch">
+      <div class="swatch-preview" style="background:#cc785c"></div>
+      <div class="swatch-name">Primary (Coral)</div>
+      <div class="swatch-hex">#cc785c</div>
+    </div>
+    <div class="swatch">
+      <div class="swatch-preview" style="background:#a9583e"></div>
+      <div class="swatch-name">Primary Active</div>
+      <div class="swatch-hex">#a9583e</div>
+    </div>
+    <div class="swatch">
+      <div class="swatch-preview" style="background:#e6dfd8"></div>
+      <div class="swatch-name">Primary Disabled</div>
+      <div class="swatch-hex">#e6dfd8</div>
+    </div>
+    <div class="swatch">
+      <div class="swatch-preview" style="background:#5db8a6"></div>
+      <div class="swatch-name">Accent Teal</div>
+      <div class="swatch-hex">#5db8a6</div>
+    </div>
+    <div class="swatch">
+      <div class="swatch-preview" style="background:#e8a55a"></div>
+      <div class="swatch-name">Accent Amber</div>
+      <div class="swatch-hex">#e8a55a</div>
+    </div>
+  </div>
+
+  <h3>Surface</h3>
+  <div class="grid color-grid">
+    <div class="swatch">
+      <div class="swatch-preview" style="background:#faf9f5;border:1px solid #444"></div>
+      <div class="swatch-name">Canvas</div>
+      <div class="swatch-hex">#faf9f5</div>
+    </div>
+    <div class="swatch">
+      <div class="swatch-preview" style="background:#f5f0e8;border:1px solid #444"></div>
+      <div class="swatch-name">Surface Soft</div>
+      <div class="swatch-hex">#f5f0e8</div>
+    </div>
+    <div class="swatch">
+      <div class="swatch-preview" style="background:#efe9de;border:1px solid #444"></div>
+      <div class="swatch-name">Surface Card</div>
+      <div class="swatch-hex">#efe9de</div>
+    </div>
+    <div class="swatch">
+      <div class="swatch-preview" style="background:#e8e0d2;border:1px solid #444"></div>
+      <div class="swatch-name">Surface Cream Strong</div>
+      <div class="swatch-hex">#e8e0d2</div>
+    </div>
+    <div class="swatch">
+      <div class="swatch-preview" style="background:#181715"></div>
+      <div class="swatch-name">Surface Dark</div>
+      <div class="swatch-hex">#181715</div>
+    </div>
+    <div class="swatch">
+      <div class="swatch-preview" style="background:#252320"></div>
+      <div class="swatch-name">Surface Dark Elevated</div>
+      <div class="swatch-hex">#252320</div>
+    </div>
+    <div class="swatch">
+      <div class="swatch-preview" style="background:#1f1e1b"></div>
+      <div class="swatch-name">Surface Dark Soft</div>
+      <div class="swatch-hex">#1f1e1b</div>
+    </div>
+    <div class="swatch">
+      <div class="swatch-preview" style="background:#e6dfd8;border:1px solid #444"></div>
+      <div class="swatch-name">Hairline</div>
+      <div class="swatch-hex">#e6dfd8</div>
+    </div>
+    <div class="swatch">
+      <div class="swatch-preview" style="background:#ebe6df;border:1px solid #444"></div>
+      <div class="swatch-name">Hairline Soft</div>
+      <div class="swatch-hex">#ebe6df</div>
+    </div>
+  </div>
+
+  <h3>Text</h3>
+  <div class="grid color-grid">
+    <div class="swatch">
+      <div class="swatch-preview" style="background:#141413"></div>
+      <div class="swatch-name">Ink</div>
+      <div class="swatch-hex">#141413</div>
+    </div>
+    <div class="swatch">
+      <div class="swatch-preview" style="background:#252523"></div>
+      <div class="swatch-name">Body Strong</div>
+      <div class="swatch-hex">#252523</div>
+    </div>
+    <div class="swatch">
+      <div class="swatch-preview" style="background:#3d3d3a"></div>
+      <div class="swatch-name">Body</div>
+      <div class="swatch-hex">#3d3d3a</div>
+    </div>
+    <div class="swatch">
+      <div class="swatch-preview" style="background:#6c6a64"></div>
+      <div class="swatch-name">Muted</div>
+      <div class="swatch-hex">#6c6a64</div>
+    </div>
+    <div class="swatch">
+      <div class="swatch-preview" style="background:#8e8b82"></div>
+      <div class="swatch-name">Muted Soft</div>
+      <div class="swatch-hex">#8e8b82</div>
+    </div>
+    <div class="swatch">
+      <div class="swatch-preview" style="background:#ffffff;border:1px solid #444"></div>
+      <div class="swatch-name">On Primary</div>
+      <div class="swatch-hex">#ffffff</div>
+    </div>
+    <div class="swatch">
+      <div class="swatch-preview" style="background:#faf9f5;border:1px solid #444"></div>
+      <div class="swatch-name">On Dark</div>
+      <div class="swatch-hex">#faf9f5</div>
+    </div>
+    <div class="swatch">
+      <div class="swatch-preview" style="background:#a09d96"></div>
+      <div class="swatch-name">On Dark Soft</div>
+      <div class="swatch-hex">#a09d96</div>
+    </div>
+  </div>
+
+  <h3>Semantic</h3>
+  <div class="grid color-grid" style="grid-template-columns:repeat(auto-fill,minmax(170px,1fr))">
+    <div class="swatch">
+      <div class="swatch-preview" style="background:#5db872"></div>
+      <div class="swatch-name">Success</div>
+      <div class="swatch-hex">#5db872</div>
+    </div>
+    <div class="swatch">
+      <div class="swatch-preview" style="background:#d4a017"></div>
+      <div class="swatch-name">Warning</div>
+      <div class="swatch-hex">#d4a017</div>
+    </div>
+    <div class="swatch">
+      <div class="swatch-preview" style="background:#c64545"></div>
+      <div class="swatch-name">Error</div>
+      <div class="swatch-hex">#c64545</div>
+    </div>
+  </div>
+
+  <!-- ================================================================== -->
+  <h2>Typography</h2>
+
+  <table>
+    <thead>
+      <tr><th>Token</th><th>Font</th><th>Size</th><th>Wt</th><th>LH</th><th>LtrS</th><th>Preview</th></tr>
+    </thead>
+    <tbody>
+      <tr><td class="token-ref">display-xl</td><td>Copernicus serif</td><td>64</td><td>400</td><td>1.05</td><td>-1.5</td><td class="font-display" style="font-size:22px;letter-spacing:-1.5px">Meet your thinking partner</td></tr>
+      <tr><td class="token-ref">display-lg</td><td>Copernicus serif</td><td>48</td><td>400</td><td>1.1</td><td>-1</td><td class="font-display" style="font-size:18px;letter-spacing:-1px">Section heading</td></tr>
+      <tr><td class="token-ref">display-md</td><td>Copernicus serif</td><td>36</td><td>400</td><td>1.15</td><td>-0.5</td><td class="font-display" style="font-size:16px;letter-spacing:-0.5px">Sub-section / model name</td></tr>
+      <tr><td class="token-ref">display-sm</td><td>Copernicus serif</td><td>28</td><td>400</td><td>1.2</td><td>-0.3</td><td class="font-display" style="font-size:14px;letter-spacing:-0.3px">Pricing tier name</td></tr>
+      <tr><td class="token-ref">title-lg</td><td>StyreneB sans</td><td>22</td><td>500</td><td>1.3</td><td>0</td><td class="font-body" style="font-size:13px;font-weight:500">Plan size label</td></tr>
+      <tr><td class="token-ref">title-md</td><td>StyreneB sans</td><td>18</td><td>500</td><td>1.4</td><td>0</td><td class="font-body" style="font-size:12px;font-weight:500">Feature card title</td></tr>
+      <tr><td class="token-ref">title-sm</td><td>StyreneB sans</td><td>16</td><td>500</td><td>1.4</td><td>0</td><td class="font-body" style="font-size:12px;font-weight:500">Connector tile title</td></tr>
+      <tr><td class="token-ref">body-md</td><td>StyreneB sans</td><td>16</td><td>400</td><td>1.55</td><td>0</td><td class="font-body" style="font-size:12px">Default running text</td></tr>
+      <tr><td class="token-ref">body-sm</td><td>StyreneB sans</td><td>14</td><td>400</td><td>1.55</td><td>0</td><td class="font-body" style="font-size:11px">Footer fine-print</td></tr>
+      <tr><td class="token-ref">caption</td><td>StyreneB sans</td><td>13</td><td>500</td><td>1.4</td><td>0</td><td class="font-body" style="font-size:11px;font-weight:500">Badge labels</td></tr>
+      <tr><td class="token-ref">caption-uc</td><td>StyreneB sans</td><td>12</td><td>500</td><td>1.4</td><td>1.5</td><td class="font-body" style="font-size:10px;font-weight:500;letter-spacing:1.5px;text-transform:uppercase">NEW</td></tr>
+      <tr><td class="token-ref">code</td><td>JetBrains Mono</td><td>14</td><td>400</td><td>1.6</td><td>0</td><td class="font-mono" style="font-size:11px">const x = 42;</td></tr>
+      <tr><td class="token-ref">button</td><td>StyreneB sans</td><td>14</td><td>500</td><td>1.0</td><td>0</td><td class="font-body" style="font-size:11px;font-weight:500">Button label</td></tr>
+      <tr><td class="token-ref">nav-link</td><td>StyreneB sans</td><td>14</td><td>500</td><td>1.4</td><td>0</td><td class="font-body" style="font-size:11px;font-weight:500">Top-nav item</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Font Substitutes</h3>
+  <table>
+    <thead><tr><th>Role</th><th>Primary</th><th>Open-Source Sub</th><th>Fallback</th></tr></thead>
+    <tbody>
+      <tr><td>Display (serif)</td><td>Copernicus / Tiempos Headline</td><td>Cormorant Garamond (w500, -0.02em)</td><td>EB Garamond</td></tr>
+      <tr><td>Body (sans)</td><td>StyreneB</td><td>Inter</td><td>-apple-system, Segoe UI</td></tr>
+      <tr><td>Code (mono)</td><td>JetBrains Mono</td><td>ui-monospace</td><td>monospace</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ================================================================== -->
+  <h2>Border Radius</h2>
+
+  <div class="radius-demo">
+    <div><div class="radius-box" style="border-radius:4px">xs</div><div class="radius-label">4px</div></div>
+    <div><div class="radius-box" style="border-radius:6px">sm</div><div class="radius-label">6px</div></div>
+    <div><div class="radius-box" style="border-radius:8px">md</div><div class="radius-label">8px</div></div>
+    <div><div class="radius-box" style="border-radius:12px">lg</div><div class="radius-label">12px</div></div>
+    <div><div class="radius-box" style="border-radius:16px">xl</div><div class="radius-label">16px</div></div>
+    <div><div class="radius-box" style="border-radius:9999px">pill</div><div class="radius-label">9999px</div></div>
+  </div>
+
+  <!-- ================================================================== -->
+  <h2>Spacing</h2>
+
+  <div>
+    <div class="spacing-row">
+      <span class="spacing-label"><span class="token-ref">spacing.xxs</span></span>
+      <span class="spacing-val">4px</span>
+      <div class="spacing-bar"><div class="spacing-block" style="width:4px"></div></div>
+    </div>
+    <div class="spacing-row">
+      <span class="spacing-label"><span class="token-ref">spacing.xs</span></span>
+      <span class="spacing-val">8px</span>
+      <div class="spacing-bar"><div class="spacing-block" style="width:8px"></div></div>
+    </div>
+    <div class="spacing-row">
+      <span class="spacing-label"><span class="token-ref">spacing.sm</span></span>
+      <span class="spacing-val">12px</span>
+      <div class="spacing-bar"><div class="spacing-block" style="width:12px"></div></div>
+    </div>
+    <div class="spacing-row">
+      <span class="spacing-label"><span class="token-ref">spacing.md</span></span>
+      <span class="spacing-val">16px</span>
+      <div class="spacing-bar"><div class="spacing-block" style="width:16px"></div></div>
+    </div>
+    <div class="spacing-row">
+      <span class="spacing-label"><span class="token-ref">spacing.lg</span></span>
+      <span class="spacing-val">24px</span>
+      <div class="spacing-bar"><div class="spacing-block" style="width:24px"></div></div>
+    </div>
+    <div class="spacing-row">
+      <span class="spacing-label"><span class="token-ref">spacing.xl</span></span>
+      <span class="spacing-val">32px</span>
+      <div class="spacing-bar"><div class="spacing-block" style="width:32px"></div></div>
+    </div>
+    <div class="spacing-row">
+      <span class="spacing-label"><span class="token-ref">spacing.xxl</span></span>
+      <span class="spacing-val">48px</span>
+      <div class="spacing-bar"><div class="spacing-block" style="width:48px"></div></div>
+    </div>
+    <div class="spacing-row">
+      <span class="spacing-label"><span class="token-ref">spacing.section</span></span>
+      <span class="spacing-val">96px</span>
+      <div class="spacing-bar"><div class="spacing-block" style="width:96px"></div></div>
+    </div>
+  </div>
+
+  <!-- ================================================================== -->
+  <h2>Components</h2>
+
+  <h3>Buttons</h3>
+  <div class="btn-group">
+    <span class="btn btn-primary">Try Claude</span>
+    <span class="btn btn-secondary">Sign in</span>
+    <span class="btn btn-dark">Learn more</span>
+  </div>
+
+  <h3>Cards</h3>
+  <div class="grid component-grid">
+    <div class="component-card">
+      <div class="component-label">Feature Card</div>
+      <div class="component-desc">--surface-card (#efe9de)</div>
+      <div class="preview-card cream">
+        <div class="card-title">Feature title</div>
+        <div class="card-body">Description text on cream card surface.</div>
+      </div>
+    </div>
+    <div class="component-card">
+      <div class="component-label">Dark Product Mockup</div>
+      <div class="component-desc">--surface-dark (#181715)</div>
+      <div class="preview-card dark">
+        <div class="card-title">Product mockup</div>
+        <div class="card-body">Code editor / terminal surface.</div>
+      </div>
+    </div>
+    <div class="component-card">
+      <div class="component-label">Coral Callout Card</div>
+      <div class="component-desc">--primary (#cc785c)</div>
+      <div class="preview-card coral">
+        <div class="card-title">Callout CTA</div>
+        <div class="card-body">Full-bleed coral call-to-action card.</div>
+      </div>
+    </div>
+  </div>
+
+  <h3>Tags / Badges</h3>
+  <div class="tag-group">
+    <span class="tag tag-default">Category</span>
+    <span class="tag tag-coral">Featured</span>
+    <span class="tag tag-coral-up">NEW</span>
+  </div>
+
+  <h3>Text Input</h3>
+  <div class="input-preview">
+    <div>Placeholder text…</div>
+  </div>
+
+  <!-- ================================================================== -->
+  <h2>Design Principles</h2>
+
+  <table>
+    <thead><tr><th>Principle</th><th>Guideline</th></tr></thead>
+    <tbody>
+      <tr><td class="token-ref">canvas</td><td>Anchor every page on the cream canvas (#faf9f5). Pure white reads as "any other AI tool".</td></tr>
+      <tr><td class="token-ref">display</td><td>Copernicus serif for every display headline. Weight 400, never bold. Negative letter-spacing non-negotiable.</td></tr>
+      <tr><td class="token-ref">coral</td><td>Reserve coral for primary CTAs and full-bleed callout cards. Don't paint accent moments coral elsewhere.</td></tr>
+      <tr><td class="token-ref">rhythm</td><td>Alternate cream → cream-card → dark-mockup bands. The cream-to-dark contrast is the brand's pacing mechanism.</td></tr>
+      <tr><td class="token-ref">no-cool-blue</td><td>Coral is the brand voltage. Don't use cool blue or saturated cyan as a brand accent.</td></tr>
+      <tr><td class="token-ref">elevation</td><td>Color-block first, shadow rare. Most depth comes from cream-vs-dark surface contrast.</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ================================================================== -->
+  <h2>CSS Custom Properties</h2>
+
+  <pre class="code-block">:root {
+  /* ── Brand & Accent ── */
+  --primary:             #cc785c;
+  --primary-active:      #a9583e;
+  --primary-disabled:    #e6dfd8;
+  --accent-teal:         #5db8a6;
+  --accent-amber:        #e8a55a;
+
+  /* ── Surface ── */
+  --canvas:              #faf9f5;
+  --surface-soft:        #f5f0e8;
+  --surface-card:        #efe9de;
+  --surface-cream-strong:#e8e0d2;
+  --surface-dark:        #181715;
+  --surface-dark-elevated:#252320;
+  --surface-dark-soft:   #1f1e1b;
+  --hairline:            #e6dfd8;
+  --hairline-soft:       #ebe6df;
+
+  /* ── Text ── */
+  --ink:                 #141413;
+  --body:                #3d3d3a;
+  --body-strong:         #252523;
+  --muted:               #6c6a64;
+  --muted-soft:          #8e8b82;
+  --on-primary:          #ffffff;
+  --on-dark:             #faf9f5;
+  --on-dark-soft:        #a09d96;
+
+  /* ── Semantic ── */
+  --success:             #5db872;
+  --warning:             #d4a017;
+  --error:               #c64545;
+
+  /* ── Border Radius ── */
+  --rounded-xs:   4px;
+  --rounded-sm:   6px;
+  --rounded-md:   8px;
+  --rounded-lg:   12px;
+  --rounded-xl:   16px;
+  --rounded-pill: 9999px;
+
+  /* ── Spacing ── */
+  --spacing-xxs:   4px;
+  --spacing-xs:    8px;
+  --spacing-sm:    12px;
+  --spacing-md:    16px;
+  --spacing-lg:    24px;
+  --spacing-xl:    32px;
+  --spacing-xxl:   48px;
+  --spacing-section: 96px;
+}</pre>
+
+  <!-- ================================================================== -->
+  <div class="meta">
+    <p><strong>Source:</strong> Claude-design-analysis (v1-alpha) — Anthropic Claude product design system.</p>
+    <p><strong>License:</strong> Design tokens extracted for reference. Brand-specific colors are Anthropic's IP.</p>
+    <p>Generated from <code>awesome-design-md-main/design-md/claude/DESIGN.md</code></p>
+  </div>
+
+</div>
+</body>
+</html>

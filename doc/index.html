@@ -1,0 +1,783 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ARCC — A Rust Copilot CLI</title>
+  <style>
+    :root {
+      --primary: #FF5722;
+      --primary-glow: #FF572222;
+      --bg: #0d0d0c;
+      --bg-elev: #141413;
+      --bg-card: #1a1a18;
+      --bg-hover: #222220;
+      --border: #2a2a27;
+      --text: #e8e6e0;
+      --text-dim: #8e8b82;
+      --text-muted: #6c6a64;
+      --green: #5db872;
+      --accent2: #5db8a6;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.7;
+      -webkit-font-smoothing: antialiased;
+    }
+    ::selection { background: var(--primary); color: #fff; }
+
+    .container { max-width: 1100px; margin: 0 auto; padding: 0 24px; }
+
+    /* ── Typography ── */
+    h1 { font-size: clamp(32px,5vw,56px); font-weight: 700; letter-spacing: -1px; line-height: 1.1; }
+    h2 { font-size: 28px; font-weight: 600; letter-spacing: -0.5px; margin-bottom: 16px; }
+    h3 { font-size: 18px; font-weight: 600; margin-bottom: 8px; }
+    p  { color: var(--text-dim); font-size: 15px; line-height: 1.7; }
+    a  { color: var(--primary); text-decoration: none; transition: opacity .2s; }
+    a:hover { opacity: .8; }
+
+    code, pre {
+      font-family: "JetBrains Mono", "Cascadia Code", "Fira Code", ui-monospace, monospace;
+    }
+
+    /* ── Scrollbar ── */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    /* ── Nav ── */
+    nav {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      background: rgba(13,13,12,.92);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      height: 56px;
+      display: flex; align-items: center;
+    }
+    nav .container {
+      display: flex; align-items: center; justify-content: space-between;
+      width: 100%;
+    }
+    .nav-brand {
+      font-family: "JetBrains Mono", monospace;
+      font-size: 15px; font-weight: 600;
+      color: var(--primary);
+    }
+    .nav-brand span { color: var(--text); }
+    .nav-links { display: flex; gap: 24px; align-items: center; }
+    .nav-links a {
+      font-size: 13px; color: var(--text-dim);
+      transition: color .2s;
+    }
+    .nav-links a:hover { color: var(--text); }
+    .nav-links .btn-nav {
+      display: inline-flex; align-items: center;
+      background: var(--primary); color: #fff;
+      font-size: 12px; font-weight: 500;
+      padding: 8px 16px; border-radius: 6px;
+      transition: opacity .2s;
+    }
+    .nav-links .btn-nav:hover { opacity: .85; color: #fff; }
+
+    /* ── Hero ── */
+    .hero {
+      padding: 160px 0 80px;
+      position: relative;
+      overflow: hidden;
+    }
+    .hero::before {
+      content: '';
+      position: absolute; top: -40%; left: -20%;
+      width: 60%; height: 100%;
+      background: radial-gradient(ellipse, var(--primary-glow) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .hero-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 60px;
+      align-items: center;
+    }
+    .hero .subtitle {
+      font-family: "JetBrains Mono", monospace;
+      font-size: 13px; color: var(--primary);
+      margin-bottom: 16px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .hero .subtitle::before {
+      content: '$'; color: var(--green);
+    }
+    .hero h1 { margin-bottom: 20px; }
+    .hero h1 .accent { color: var(--primary); }
+    .hero p { font-size: 16px; margin-bottom: 32px; max-width: 480px; }
+    .hero-actions { display: flex; gap: 12px; flex-wrap: wrap; }
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      font-size: 14px; font-weight: 500;
+      padding: 12px 24px; border-radius: 8px;
+      border: none; cursor: pointer; transition: all .2s;
+      font-family: inherit;
+    }
+    .btn-primary {
+      background: var(--primary); color: #fff;
+    }
+    .btn-primary:hover { opacity: .85; transform: translateY(-1px); }
+    .btn-secondary {
+      background: var(--bg-card); color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .btn-secondary:hover { background: var(--bg-hover); transform: translateY(-1px); }
+
+    /* ── Terminal mockup ── */
+    .hero-terminal {
+      background: #000;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+      box-shadow: 0 20px 60px rgba(0,0,0,.5);
+    }
+    .terminal-header {
+      display: flex; align-items: center; gap: 8px;
+      padding: 12px 16px;
+      background: var(--bg-elev);
+      border-bottom: 1px solid var(--border);
+    }
+    .terminal-dot { width: 10px; height: 10px; border-radius: 50%; }
+    .terminal-dot:nth-child(1) { background: #c64545; }
+    .terminal-dot:nth-child(2) { background: #d4a017; }
+    .terminal-dot:nth-child(3) { background: #5db872; }
+    .terminal-title {
+      font-size: 11px; color: var(--text-muted);
+      margin-left: 12px; font-family: "JetBrains Mono", monospace;
+    }
+    .terminal-body {
+      padding: 20px;
+      font-family: "JetBrains Mono", monospace;
+      font-size: 13px; line-height: 1.7;
+      color: #d4d0c8;
+      min-height: 220px;
+    }
+    .terminal-body .prompt { color: var(--green); }
+    .terminal-body .cmd    { color: var(--text); }
+    .terminal-body .output { color: var(--text-dim); }
+    .terminal-body .output span { color: var(--primary); }
+    .terminal-body .cursor {
+      display: inline-block; width: 8px; height: 15px;
+      background: var(--primary); vertical-align: text-bottom;
+      animation: blink 1s step-end infinite;
+    }
+    @keyframes blink { 50% { opacity: 0; } }
+
+    /* ── Section common ── */
+    section { padding: 80px 0; }
+    .section-label {
+      font-family: "JetBrains Mono", monospace;
+      font-size: 11px; color: var(--primary);
+      text-transform: uppercase; letter-spacing: 2px;
+      margin-bottom: 8px;
+    }
+    .section-desc {
+      max-width: 600px; margin-bottom: 48px;
+    }
+
+    /* ── Modes ── */
+    .modes-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+    }
+    .mode-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 28px;
+      transition: border-color .2s, transform .2s;
+    }
+    .mode-card:hover {
+      border-color: var(--primary);
+      transform: translateY(-2px);
+    }
+    .mode-icon {
+      font-size: 28px; margin-bottom: 12px;
+      display: inline-block;
+    }
+    .mode-card h3 { font-size: 16px; }
+    .mode-card p { font-size: 13px; margin: 8px 0 16px; }
+    .mode-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+    .mode-tag {
+      display: inline-block;
+      font-size: 10px; font-weight: 500;
+      padding: 3px 8px; border-radius: 4px;
+      background: var(--bg-hover); color: var(--text-dim);
+      text-transform: uppercase; letter-spacing: .5px;
+    }
+    .mode-tag.primary { background: var(--primary); color: #fff; }
+
+    /* ── Feature grid ── */
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 16px;
+    }
+    .feature-card {
+      background: var(--bg-card);
+      border: 2px solid var(--border);
+      border-radius: 0;
+      padding: 24px 28px 28px;
+      position: relative;
+      box-shadow: 4px 4px 0 0 rgba(0,0,0,.4);
+      transition: border-color .12s, box-shadow .12s, transform .12s;
+      background-image:
+        linear-gradient(rgba(255,255,255,.015) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.015) 1px, transparent 1px);
+      background-size: 8px 8px;
+    }
+    .feature-card::before {
+      content: '';
+      position: absolute;
+      top: -2px; left: 16px; right: 16px;
+      height: 2px;
+      background: var(--primary);
+      opacity: 0;
+      transition: opacity .12s;
+    }
+    .feature-card:hover {
+      border-color: var(--primary);
+      box-shadow: 6px 6px 0 0 rgba(255,87,34,.2);
+      transform: translate(-1px, -1px);
+    }
+    .feature-card:hover::before {
+      opacity: 1;
+    }
+    .feature-card .icon {
+      font-size: 22px;
+      margin-bottom: 16px;
+      width: 44px;
+      height: 44px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 0;
+      border: 2px solid rgba(255,87,34,.25);
+      background: rgba(255,87,34,.07);
+      color: var(--primary);
+      box-shadow: 2px 2px 0 0 rgba(0,0,0,.3);
+      transition: background .12s, border-color .12s, box-shadow .12s;
+    }
+    .feature-card:hover .icon {
+      background: rgba(255,87,34,.12);
+      border-color: rgba(255,87,34,.4);
+      box-shadow: 2px 2px 0 0 rgba(255,87,34,.2);
+    }
+    .feature-card .icon svg, .mode-icon svg { vertical-align: middle; }
+    .feature-card h3 {
+      font-size: 14px;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      font-family: "JetBrains Mono", ui-monospace, monospace;
+      color: var(--text);
+    }
+    .feature-card p {
+      font-size: 13px;
+      margin-top: 8px;
+      line-height: 1.6;
+    }
+
+    /* ── Architecture (CSS-based) ── */
+    .arch-diagram {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 24px;
+      overflow-x: auto;
+    }
+    .arch-box {
+      font-family: "JetBrains Mono", "Cascadia Code", ui-monospace, monospace;
+      font-size: 12px;
+      line-height: 1.6;
+    }
+    .arch-crate-box {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px 20px;
+      background: rgba(0,0,0,.3);
+      margin-bottom: 6px;
+    }
+    .arch-header {
+      color: var(--text-dim);
+      margin-bottom: 12px;
+    }
+    .arch-header strong {
+      color: var(--primary);
+      font-weight: 600;
+    }
+    .arch-header .sub {
+      color: var(--text-muted);
+      font-weight: 400;
+    }
+    .arch-row {
+      display: flex;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .arch-cell {
+      flex: 1;
+      padding: 10px 16px;
+      text-align: center;
+      border-right: 1px solid var(--border);
+    }
+    .arch-cell:last-child { border-right: none; }
+    .arch-cell .name {
+      color: var(--primary);
+      font-weight: 600;
+      font-size: 13px;
+    }
+    .arch-cell .tech {
+      color: var(--text-muted);
+      font-size: 10px;
+      margin-top: 2px;
+      letter-spacing: .3px;
+    }
+    .arch-arrow {
+      text-align: center;
+      color: var(--border);
+      font-size: 14px;
+      padding: 3px 0;
+      line-height: 1;
+    }
+    .arch-block {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 20px;
+      margin-bottom: 6px;
+      text-align: center;
+      background: rgba(0,0,0,.3);
+    }
+    .arch-block .name {
+      font-weight: 600;
+      font-size: 13px;
+      margin-bottom: 2px;
+    }
+    .arch-block .name.core   { color: var(--green); }
+    .arch-block .name.storage { color: var(--accent2); }
+    .arch-block .desc {
+      color: var(--text-muted);
+      font-size: 11px;
+    }
+    .arch-legend {
+      margin-top: 20px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border);
+      font-family: "JetBrains Mono", "Cascadia Code", ui-monospace, monospace;
+      font-size: 12px;
+      line-height: 1.8;
+      color: var(--text-muted);
+    }
+    .arch-legend .label  { color: var(--text-dim); }
+    .arch-legend .arrow  { color: var(--border); }
+    .arch-legend .pro,
+    .arch-legend .flash { color: var(--primary); }
+    .arch-legend .s-toml,
+    .arch-legend .s-sqlite,
+    .arch-legend .s-jsonl,
+    .arch-legend .s-mem  { color: var(--accent2); }
+    .arch-legend .detail {
+      color: var(--text-muted);
+      margin-left: 2px;
+    }
+
+    /* ── Quick Start ── */
+    .code-block {
+      background: #000;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .code-block-header {
+      display: flex; align-items: center; gap: 8px;
+      padding: 10px 16px;
+      background: var(--bg-elev);
+      border-bottom: 1px solid var(--border);
+      font-size: 11px; color: var(--text-muted);
+      font-family: "JetBrains Mono", monospace;
+    }
+    .code-block-body {
+      padding: 20px;
+      font-family: "JetBrains Mono", monospace;
+      font-size: 13px; line-height: 1.7;
+      color: #d4d0c8;
+      overflow-x: auto;
+      white-space: pre;
+    }
+    .code-block-body .comment { color: var(--text-muted); }
+    .code-block-body .keyword { color: var(--primary); }
+    .code-block-body .string  { color: var(--green); }
+    .code-block-body .prompt  { color: var(--green); }
+
+    .install-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-top: 24px;
+    }
+
+    /* ── Footer ── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 40px 0;
+      margin-top: 40px;
+    }
+    footer p { font-size: 12px; }
+    .footer-grid {
+      display: grid;
+      grid-template-columns: 2fr 1fr 1fr 1fr;
+      gap: 40px;
+    }
+    .footer-brand { font-family: "JetBrains Mono", monospace; font-size: 14px; color: var(--primary); }
+    .footer-brand span { color: var(--text); }
+    .footer-col h4 { font-size: 12px; font-weight: 500; margin-bottom: 12px; color: var(--text); }
+    .footer-col a {
+      display: block; font-size: 13px; color: var(--text-dim);
+      margin-bottom: 6px;
+    }
+    .footer-col a:hover { color: var(--text); }
+
+    /* ── Responsive ── */
+    @media (max-width: 768px) {
+      .hero-grid { grid-template-columns: 1fr; gap: 40px; }
+      .hero { padding: 120px 0 40px; }
+      .modes-grid { grid-template-columns: 1fr; }
+      .features-grid { grid-template-columns: 1fr; }
+      .install-grid { grid-template-columns: 1fr; }
+      .footer-grid { grid-template-columns: 1fr 1fr; gap: 24px; }
+      nav .nav-links a:not(.btn-nav) { display: none; }
+    }
+
+    /* ── Animations ── */
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(20px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .hero > .container > * { animation: fadeUp .6s ease-out both; }
+    .hero > .container > *:nth-child(2) { animation-delay: .1s; }
+  </style>
+</head>
+<body>
+
+  <!-- ══════════════════════════════════════════════ -->
+  <!-- NAV -->
+  <!-- ══════════════════════════════════════════════ -->
+  <nav>
+    <div class="container">
+      <div class="nav-brand">ARCC <span>/* A Rust Copilot CLI */</span></div>
+      <div class="nav-links">
+        <a href="#modes">Modes</a>
+        <a href="#features">Features</a>
+        <a href="#arch">Architecture</a>
+        <a href="#quickstart">Quick Start</a>
+        <a href="https://github.com/niyongsheng/arcc" target="_blank" class="btn-nav">GitHub →</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- ══════════════════════════════════════════════ -->
+  <!-- HERO -->
+  <!-- ══════════════════════════════════════════════ -->
+  <section class="hero">
+    <div class="container">
+      <div class="hero-grid">
+        <div>
+          <div class="subtitle">AI Terminal Agent · Rust 2024 · MCP Native</div>
+          <h1>Your <span class="accent">AI Copilot</span>,<br>always in the terminal</h1>
+          <p>A universal AI agent that lives in your terminal — TUI, CLI, or background daemon. Powered by DeepSeek-V4, wired via MCP, built in Rust.</p>
+          <div class="hero-actions">
+            <a href="#quickstart" class="btn btn-primary">Get Started</a>
+            <a href="#modes" class="btn btn-secondary">Explore Modes ↓</a>
+          </div>
+        </div>
+
+        <div class="hero-terminal">
+          <div class="terminal-header">
+            <span class="terminal-dot"></span>
+            <span class="terminal-dot"></span>
+            <span class="terminal-dot"></span>
+            <span class="terminal-title">arcc tui</span>
+          </div>
+          <div class="terminal-body">
+            <span class="prompt">$</span> <span class="cmd">arcc tui</span><br>
+            <span class="prompt">&gt;</span> <span class="cmd">show me the latest git log</span><br>
+            <span class="output"><span>🧠</span> Let me check the repo...</span><br>
+            <span class="output">$ git log --oneline -5</span><br>
+            <span class="output">a468c42 docs: add server deployment guide</span><br>
+            <span class="output">9ea7e94 Add scheduler and queue design doc</span><br>
+            <span class="output">db1a7f0 Bump to 0.8.0</span><br>
+            <span class="output">4308bfa Add one-shot task support</span><br>
+            <span class="output">b92d94b Fix cron timezone parsing</span><br>
+            <span class="prompt">&gt;</span> <span class="cmd"></span><span class="cursor"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════ -->
+  <!-- MODES -->
+  <!-- ══════════════════════════════════════════════ -->
+  <section id="modes">
+    <div class="container">
+      <div class="section-label">/ modes</div>
+      <h2>Three modes, one engine</h2>
+      <p class="section-desc">Same core runtime, three surfaces — pick the interface that fits your workflow.</p>
+
+      <div class="modes-grid">
+        <div class="mode-card">
+          <div class="mode-icon"><svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></div>
+          <h3>TUI — Interactive Terminal</h3>
+          <p>Full-screen ratatui interface with markdown rendering, spinner animations, multi-turn conversation, slash commands, and tab completion.</p>
+          <div class="mode-tags">
+            <span class="mode-tag primary">multi-turn</span>
+            <span class="mode-tag">tool calls</span>
+            <span class="mode-tag">session persist</span>
+            <span class="mode-tag">60fps</span>
+          </div>
+        </div>
+
+        <div class="mode-card">
+          <div class="mode-icon"><svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10"/></svg></div>
+          <h3>CLI — One-shot &amp; Pipes</h3>
+          <p>Drop-in replacement for shell commands. Single-prompt execution with tool calling, pipe-friendly output, and JSON mode for programmatic use.</p>
+          <div class="mode-tags">
+            <span class="mode-tag primary">single-turn</span>
+            <span class="mode-tag">pipes</span>
+            <span class="mode-tag">JSON</span>
+            <span class="mode-tag">scriptable</span>
+          </div>
+        </div>
+
+        <div class="mode-card">
+          <div class="mode-icon"><svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/><circle cx="12" cy="12" r="3" fill="currentColor" opacity="0.3"/></svg></div>
+          <h3>Server — Background Daemon</h3>
+          <p>HTTP server with SSE streaming, Feishu bot integration, scheduled tasks, and Prometheus metrics. Runs 24×7 as a background service.</p>
+          <div class="mode-tags">
+            <span class="mode-tag primary">daemon</span>
+            <span class="mode-tag">webhook</span>
+            <span class="mode-tag">scheduler</span>
+            <span class="mode-tag">metrics</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════ -->
+  <!-- FEATURES -->
+  <!-- ══════════════════════════════════════════════ -->
+  <section id="features">
+    <div class="container">
+      <div class="section-label">/ features</div>
+      <h2>Built for the terminal</h2>
+      <p class="section-desc">Every feature designed for zero-friction automation — no IDE, no browser, just your shell.</p>
+
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="icon"><svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2A3.5 3.5 0 0 0 6 5.5 3.5 3.5 0 0 0 3.5 9a3.5 3.5 0 0 0 .53 1.85A3.5 3.5 0 0 0 5.5 16a3.5 3.5 0 0 0 5 2.28"/><path d="M14.5 2A3.5 3.5 0 0 1 18 5.5 3.5 3.5 0 0 1 20.5 9a3.5 3.5 0 0 1-.53 1.85A3.5 3.5 0 0 1 18.5 16a3.5 3.5 0 0 1-5 2.28"/><path d="M12 4v6"/><path d="M10 8h4"/><path d="M9 14l3-1.5 3 1.5"/></svg></div>
+          <h3>Dual-Model Dispatch</h3>
+          <p>DeepSeek-V4-Pro for complex reasoning &amp; orchestration; V4-Flash for high-frequency dialogue and context compression. Automatic routing based on task complexity.</p>
+        </div>
+        <div class="feature-card">
+          <div class="icon"><svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a6 6 0 0 1-12 0V8z"/><circle cx="12" cy="16" r="1" fill="currentColor"/></svg></div>
+          <h3>MCP Native</h3>
+          <p>Full Model Context Protocol support — stdio and SSE transports. Register any MCP server as a tool provider. Claude Code can call ARCC as an MCP tool.</p>
+        </div>
+        <div class="feature-card">
+          <div class="icon"><svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l7 4v5c0 5.25-3.5 10-7 11-3.5-1-7-5.75-7-11V6l7-4z"/><path d="M9 12l2 2 4-4"/></svg></div>
+          <h3>Safety Engine</h3>
+          <p>Three-layer defense: command allowlist, risk rating, interactive confirmation. Serde-typed secondary validation prevents LLM injection.</p>
+        </div>
+        <div class="feature-card">
+          <div class="icon"><svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg></div>
+          <h3>Zero-Dependency Storage</h3>
+          <p>SQLite (bundled, WAL mode) for sessions &amp; messages, TOML for config, JSON Lines for audit. No external databases, no daemons.</p>
+        </div>
+        <div class="feature-card">
+          <div class="icon"><svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg></div>
+          <h3>Context Compression</h3>
+          <p>Automatic token-budget management. When approaching ~8K tokens, the flash model generates a summary — preserving decisions, dropping redundancy.</p>
+        </div>
+        <div class="feature-card">
+          <div class="icon"><svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></div>
+          <h3>Observability</h3>
+          <p>Structured tracing via tokio/tracing, Prometheus metrics export, session replay from SQLite, audit trail in JSON Lines. Debug with confidence.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════ -->
+  <!-- ARCHITECTURE -->
+  <!-- ══════════════════════════════════════════════ -->
+  <section id="arch">
+    <div class="container">
+      <div class="section-label">/ architecture</div>
+      <h2>Cargo workspace</h2>
+      <p class="section-desc">Six crates, clean separation of concerns. The core is model-agnostic — swap providers without touching the rest.</p>
+
+      <div class="arch-diagram">
+        <div class="arch-box">
+
+          <div class="arch-crate-box">
+            <div class="arch-header"><strong>arcc</strong> <span class="sub">(binary entry · clap routing)</span></div>
+            <div class="arch-row">
+              <div class="arch-cell">
+                <div class="name">arcc-tui</div>
+                <div class="tech">ratatui · crossterm</div>
+              </div>
+              <div class="arch-cell">
+                <div class="name">arcc-cli</div>
+                <div class="tech">portable-pty</div>
+              </div>
+              <div class="arch-cell">
+                <div class="name">arcc-server</div>
+                <div class="tech">axum · Feishu</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="arch-arrow">▾</div>
+
+          <div class="arch-block">
+            <div class="name core">arcc-core</div>
+            <div class="desc">ModelProvider · Session · Safety · Tools · MCP · Memory · Prompts</div>
+          </div>
+
+          <div class="arch-arrow">▾</div>
+
+          <div class="arch-block">
+            <div class="name storage">arcc-storage</div>
+            <div class="desc">SQLite · TOML · JSON Lines</div>
+          </div>
+
+        </div>
+
+        <div class="arch-legend">
+          <span class="label">Model Provider Interface:</span><br>
+          &nbsp;&nbsp;<span class="name core">ModelProvider</span> ← <span class="pro">DeepSeek-V4-Pro</span> <span class="detail">(reasoning)</span><br>
+          &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="flash">DeepSeek-V4-Flash</span> <span class="detail">(dialogue)</span><br>
+          <br>
+          <span class="label">Persistence (embedded, no external services):</span><br>
+          &nbsp;&nbsp;Config &nbsp;→ <span class="s-toml">TOML</span> &nbsp;&nbsp;&nbsp;· ~/.arcc/config.toml<br>
+          &nbsp;&nbsp;Session → <span class="s-sqlite">SQLite</span> &nbsp;· WAL mode, rusqlite bundled<br>
+          &nbsp;&nbsp;Audit &nbsp;&nbsp;→ <span class="s-jsonl">JSONL</span> &nbsp;&nbsp;&nbsp;· append-only, tail-seekable<br>
+          &nbsp;&nbsp;Metrics → <span class="s-mem">Memory</span> &nbsp;&nbsp;· Prometheus scrape endpoint
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════ -->
+  <!-- QUICK START -->
+  <!-- ══════════════════════════════════════════════ -->
+  <section id="quickstart">
+    <div class="container">
+      <div class="section-label">/ quick start</div>
+      <h2>Quick start</h2>
+      <p class="section-desc">All you need is a DeepSeek API key.</p>
+
+      <div class="code-block">
+        <div class="code-block-header">
+          <span>⧩ install.sh</span>
+          <span style="margin-left:auto">curl → bash</span>
+        </div>
+        <div class="code-block-body">
+<span class="comment"># One-line install</span>
+$ curl -fsSL https://raw.githubusercontent.com/niyongsheng/arcc/main/scripts/install.sh | bash
+
+<span class="comment"># Set your API key</span>
+$ echo '<span class="string">[model]</span>' &gt; ~/.arcc/config.toml
+$ <span class="keyword">echo</span> '<span class="string">api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"</span>' &gt;&gt; ~/.arcc/config.toml
+
+<span class="comment"># Start the TUI</span>
+$ <span class="keyword">arcc</span> tui</pre>
+        </div>
+      </div>
+
+      <div class="install-grid">
+        <div class="code-block">
+          <div class="code-block-header">
+            <span>⎇ Development</span>
+            <span style="margin-left:auto">cargo</span>
+          </div>
+          <div class="code-block-body">
+<span class="prompt">$</span> <span class="keyword">cargo build</span>                <span class="comment"># Debug build</span>
+<span class="prompt">$</span> <span class="keyword">cargo run</span> -- tui           <span class="comment"># Launch TUI</span>
+<span class="prompt">$</span> <span class="keyword">cargo run</span> -- cli <span class="string">"&lt;prompt&gt;"</span> <span class="comment"># CLI mode</span>
+<span class="prompt">$</span> <span class="keyword">cargo build --release</span>      <span class="comment"># Release build</span></pre>
+          </div>
+        </div>
+
+        <div class="code-block">
+          <div class="code-block-header">
+            <span>⊞ MCP Integration</span>
+            <span style="margin-left:auto">Claude Code</span>
+          </div>
+          <div class="code-block-body">
+<span class="comment"># Add to ~/.claude/settings.json:</span>
+{
+  <span class="string">"mcpServers"</span>: {
+    <span class="string">"arcc"</span>: {
+      <span class="keyword">"type"</span>: <span class="string">"stdio"</span>,
+      <span class="keyword">"command"</span>: <span class="string">"/path/to/arcc-mcp"</span>
+    }
+  }
+}</pre>
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top:16px;text-align:center">
+        <p style="font-size:13px">See <a href="config/config.toml">config/config.toml</a> for all available options &nbsp;·&nbsp; Read the <a href="README.md">README</a></p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════ -->
+  <!-- FOOTER -->
+  <!-- ══════════════════════════════════════════════ -->
+  <footer>
+    <div class="container">
+      <div class="footer-grid">
+        <div>
+          <div class="footer-brand">ARCC <span>/* A Rust Copilot CLI */</span></div>
+          <p style="margin-top:8px">A universal AI agent for the terminal. TUI, CLI, and server — one core, three surfaces. MIT licensed.</p>
+        </div>
+        <div class="footer-col">
+          <h4>Modes</h4>
+          <a href="#modes">TUI</a>
+          <a href="#modes">CLI</a>
+          <a href="#modes">Server</a>
+        </div>
+        <div class="footer-col">
+          <h4>Resources</h4>
+          <a href="https://github.com/niyongsheng/arcc">GitHub</a>
+          <a href="../README.md">README</a>
+          <a href="../docs/tutorial/tui-tutorial.md">TUI Tutorial</a>
+        </div>
+        <div class="footer-col">
+          <h4>Stack</h4>
+          <a href="https://www.rust-lang.org/" target="_blank">Rust 2024</a>
+          <a href="https://platform.deepseek.com/" target="_blank">DeepSeek-V4</a>
+          <a href="https://modelcontextprotocol.io/" target="_blank">MCP Protocol</a>
+        </div>
+      </div>
+      <p style="margin-top:32px;font-size:11px;color:var(--text-muted)">© 2026 — Built with Rust &amp; DeepSeek</p>
+    </div>
+  </footer>
+
+</body>
+</html>

@@ -2,12 +2,12 @@
 
 # ARCC
 
-**[ARCC](https://juejin.cn/post/7650384140925812751) (AI Rust Claude CLI)** — Three-in-One Personal AI Assistant.
+**[ARCC](https://juejin.cn/post/7650384140925812751) (A Rust Copilot CLI)** — Rust-based terminal AI Agent, Optimized for DeepSeek-V4, supporting TUI, CLI and Server modes.
 
 [![Rust](https://img.shields.io/badge/Rust-2024-%23DEA584?logo=rust)](https://www.rust-lang.org)
 [![DeepSeek](https://img.shields.io/badge/DeepSeek-V4-%234A90D9)](https://deepseek.com)
 
-![arcc tui demo](docs/arcc_tui_demo.gif)
+![arcc tui demo](doc/arcc_tui_demo.gif)
 
 ---
 
@@ -15,13 +15,13 @@
 
 | Mode | Command | Multi-Turn | Memory | Tool Call | Session Persist | Script/Pipe | IM Bot |
 |------|---------|:----------:|:------:|:---------:|:---------------:|:-----------:|:------:|
-| [**TUI**](docs/tutorial/tui-tutorial.md) | `arcc tui` | ✅ | — | ✅ | ✅ | — | — |
-| [**CLI**](docs/tutorial/cli-tutorial.md) | `arcc cli "<prompt>"` | — | — | ✅ | — | ✅ | — |
-| [**Server**](docs/tutorial/server-tutorial.md) | `arcc server --daemon` | ✅ | ✅ | ✅ | ✅ | — | ✅ |
+| [**TUI**](doc/tutorial/tui-tutorial.md) | `arcc tui` | ✅ | — | ✅ | ✅ | — | — |
+| [**CLI**](doc/tutorial/cli-tutorial.md) | `arcc cli "<prompt>"` | — | — | ✅ | — | ✅ | — |
+| [**Server**](doc/tutorial/server-tutorial.md) | `arcc server --daemon` | ✅ | ✅ | ✅ | ✅ | — | ✅ |
 
 ## Quick Start
 
-You only need one [DeepSeek API Key](https://platform.deepseek.com)：
+You need one [DeepSeek API Key](https://platform.deepseek.com)：
 
 ```bash
 # install
@@ -32,6 +32,17 @@ echo '[model]
 api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"' > ~/.arcc/config.toml
 ```
 See [config/config.toml](config/config.toml) for all available options.
+
+## Development
+
+```bash
+cargo build                    # Debug build
+cargo run -- tui               # Start TUI interactive mode
+cargo run -- cli "<prompt>"    # CLI mode (single-turn, pipe-friendly)
+cargo run -- server --daemon   # Start server daemon
+
+cargo build --release          # Release build
+```
 
 ## Architecture
 
