@@ -2,7 +2,7 @@
 
 # ARCC
 
-**[ARCC](https://juejin.cn/post/7650384140925812751) (A Rust Copilot CLI)** — Rust-based terminal AI Agent, Optimized for DeepSeek-V4, supporting TUI, CLI and Server modes.
+**[ARCC](https://juejin.cn/post/7650384140925812751) (A Rust Copilot CLI)** — Rust-based terminal AI Agent, Optimized for DeepSeek-V4 mode of thinking, supporting TUI, CLI and Server modes.
 
 [![Rust](https://img.shields.io/badge/Rust-2024-%23DEA584?logo=rust)](https://www.rust-lang.org)
 [![DeepSeek](https://img.shields.io/badge/DeepSeek-V4-%234A90D9)](https://deepseek.com)

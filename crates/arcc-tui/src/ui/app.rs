@@ -1643,7 +1643,7 @@ pub async fn run(ctx: SharedContext) -> anyhow::Result<()> {
                                             "tool" => ("⚡ ", "tool"),
                                             _ => ("📝 ", "?"),
                                         };
-                                        app.messages.push(format!("{role_emoji}{}", &m.content));
+                                        app.messages.push(format!("{role_emoji}{}", m.content));
                                         let ts = m.created_at.as_deref().unwrap_or("?");
                                         let tokens = m
                                             .token_count
