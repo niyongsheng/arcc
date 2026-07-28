@@ -2,16 +2,37 @@
 
 # ARCC
 
-**[ARCC](https://juejin.cn/post/7650384140925812751) (A Rust Copilot CLI)** — Rust-based terminal AI Agent optimized for DeepSeek-V4 thinking mode, with TUI, CLI and Server support.
+**[ARCC](https://juejin.cn/post/7650384140925812751) (A Rust Copilot CLI)** — Rust-based local-first AI Agent with CLI/TUI/Server modes, supports MCP & ACP protocols, connected to DeepSeek/Claude/OpenAI, built-in safety engine and SQLite persistence.
 
 [![Rust](https://img.shields.io/badge/Rust-2024-%23DEA584?logo=rust)](https://www.rust-lang.org)
 [![DeepSeek](https://img.shields.io/badge/DeepSeek-V4-%234A90D9)](https://deepseek.com)
+[![MCP](https://img.shields.io/badge/MCP-Compatible-%2300A86B)](https://modelcontextprotocol.io)
+[![ACP](https://img.shields.io/badge/ACP-Compatible-%236F42C1)](https://github.com/nicepkg/acp)
 [![CI](https://github.com/niyongsheng/arcc/actions/workflows/ci.yml/badge.svg)](https://github.com/niyongsheng/arcc/actions/workflows/ci.yml)
 [![CD](https://img.shields.io/github/v/release/niyongsheng/arcc?display_name=tag&logo=github)](https://github.com/niyongsheng/arcc/releases)
 
 ![arcc tui demo](doc/arcc_tui_demo.gif)
 
 ---
+
+## Features
+
+- **🤖 Dual-Model Scheduling** — Complex tasks → DeepSeek-V4-Pro (reasoning); routine chat → DeepSeek-V4-Flash (speed). Auto-rotate when context exceeds 800k tokens.
+- **🔌 MCP & ACP Protocols** — Native Model Context Protocol client for plugin tool registration. Agent Communication Protocol support for inter-agent collaboration.
+- **🛡️ Safety Engine** — 3-layer defense: command allowlist → risk rating → TUI interactive confirm (y/a/n) for dangerous operations.
+- **💾 SQLite Persistence** — Sessions, messages, token usage persisted locally via rusqlite (bundled, zero system deps).
+- **📋 Audit Logging** — All command executions, MCP calls, and human approvals recorded to JSON Lines for traceability.
+- **🧠 Context Compression** — Automatic summarization at token threshold (default ~800k), preserving decisions and pending items.
+- **⚡ 3 Running Modes** — **TUI** (ratatui, ~60fps, multi-turn), **CLI** (one-shot/pipe, portable-pty), **Server** (axum, Feishu SSE webhook).
+- **🔒 Local-First** — All data stays on your machine. No cloud sync, no telemetry, no external dependencies beyond the model API.
+
+## Protocol Support
+
+| Protocol | Support | Purpose |
+|----------|:-------:|---------|
+| **MCP** (Model Context Protocol) | ✅ Client | Register external tools as MCP plugins |
+| **ACP** (Agent Communication Protocol) | ✅ | Inter-agent message routing & collaboration |
+| **SSE** (Server-Sent Events) | ✅ | IM bot push (Feishu webhook) |
 
 ## Running Modes
 
