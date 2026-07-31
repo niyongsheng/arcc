@@ -81,16 +81,19 @@ impl ModelProvider for MockProvider {
             );
 
             // Simulate streaming by sending chunks.
+            // NOTE: `send` returns a future — it must be awaited, otherwise
+            // the item is never delivered (dropping the future drops the
+            // send, yielding an empty stream).
             let words: Vec<&str> = response.split_inclusive(' ').collect();
             for word in words {
-                drop(tx.send(Ok(StreamChunk::Content(word.to_string()))));
+                let _ = tx.send(Ok(StreamChunk::Content(word.to_string()))).await;
                 tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
             }
 
-            drop(tx.send(Ok(StreamChunk::Finish(Usage {
+            let _ = tx.send(Ok(StreamChunk::Finish(Usage {
                 prompt_tokens: user_input.len() as u32 / 3,
                 completion_tokens: response.len() as u32 / 3,
-            }))));
+            }))).await;
         });
 
         Ok(Box::new(ReceiverStream::new(rx)))
