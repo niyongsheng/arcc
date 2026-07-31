@@ -112,12 +112,19 @@ pub fn notify(method: &str, params: Value) -> Value {
 // ---------------------------------------------------------------------------
 
 /// `session/update` notification wrapping a typed `sessionUpdate` union.
+///
+/// Wire format follows `agent_client_protocol_schema::v1` exactly: the
+/// `SessionUpdate` enum is internally tagged on a **`sessionUpdate`** key
+/// whose value is the snake_case variant identifier (a plain string) with
+/// the variant's fields flattened into the same object — NOT a nested
+/// `{"type": ...}` object. AionUI rejects the nested form with
+/// "invalid type: map, expected variant identifier".
 pub fn session_update(session_id: &str, session_update: Value) -> Value {
     notify(
         "session/update",
         json!({
             "sessionId": session_id,
-            "update": { "sessionUpdate": session_update },
+            "update": session_update,
         }),
     )
 }
@@ -125,7 +132,7 @@ pub fn session_update(session_id: &str, session_update: Value) -> Value {
 /// Streamed assistant text — `agent_message_chunk`.
 pub fn agent_message_chunk(message_id: Option<&str>, text: &str) -> Value {
     let mut update = json!({
-        "type": "agent_message_chunk",
+        "sessionUpdate": "agent_message_chunk",
         "content": { "type": "text", "text": text },
     });
     if let Some(id) = message_id {
@@ -137,7 +144,7 @@ pub fn agent_message_chunk(message_id: Option<&str>, text: &str) -> Value {
 /// Streamed model reasoning — `agent_thought_chunk`.
 pub fn agent_thought_chunk(message_id: Option<&str>, text: &str) -> Value {
     let mut update = json!({
-        "type": "agent_thought_chunk",
+        "sessionUpdate": "agent_thought_chunk",
         "content": { "type": "text", "text": text },
     });
     if let Some(id) = message_id {
@@ -146,7 +153,8 @@ pub fn agent_thought_chunk(message_id: Option<&str>, text: &str) -> Value {
     update
 }
 
-/// Tool lifecycle start — `tool_call` with `status: "pending"`.
+/// Tool lifecycle start — `tool_call`, default `kind: "execute"` and
+/// `status: "pending"`.
 pub fn tool_call_status(
     tool_call_id: &str,
     title: &str,
@@ -155,33 +163,38 @@ pub fn tool_call_status(
     raw_input: Option<&str>,
 ) -> Value {
     let mut update = json!({
-        "type": "tool_call",
+        "sessionUpdate": "tool_call",
         "toolCallId": tool_call_id,
         "title": title,
-        "kind": kind,
-        "status": status,
     });
+    if kind != "execute" {
+        update["kind"] = json!(kind);
+    }
+    if status != "pending" {
+        update["status"] = json!(status);
+    }
     if let Some(raw) = raw_input {
         update["rawInput"] = json!(raw);
     }
     update
 }
 
-/// Tool lifecycle change — `tool_call_update` (`running` / `completed` / `error`).
+/// Tool lifecycle change — `tool_call_update`.
+///
+/// `status` is one of `pending` / `in_progress` / `completed` / `failed`
+/// (the official `ToolCallStatus`). Arbitrary per-tool results go in
+/// `rawOutput` — the official `content` field is a `ToolCallContent`
+/// array with its own tagging rules, which we deliberately avoid.
 pub fn tool_call_update(
     tool_call_id: &str,
     status: &str,
-    content: Option<Value>,
     raw_output: Option<Value>,
 ) -> Value {
     let mut update = json!({
-        "type": "tool_call_update",
+        "sessionUpdate": "tool_call_update",
         "toolCallId": tool_call_id,
         "status": status,
     });
-    if let Some(c) = content {
-        update["content"] = c;
-    }
     if let Some(r) = raw_output {
         update["rawOutput"] = r;
     }
@@ -191,7 +204,7 @@ pub fn tool_call_update(
 /// Context-window usage — `usage_update`: `used` = tokens consumed so far,
 /// `size` = the session's context budget (compression threshold).
 pub fn usage_update(used: usize, size: usize) -> Value {
-    json!({ "type": "usage_update", "used": used, "size": size })
+    json!({ "sessionUpdate": "usage_update", "used": used, "size": size })
 }
 
 // ---------------------------------------------------------------------------
@@ -250,9 +263,41 @@ mod tests {
         let v = session_update("s1", agent_message_chunk(None, "hello"));
         assert_eq!(v["method"], "session/update");
         assert_eq!(v["params"]["sessionId"], "s1");
+        // The variant identifier is the value of `sessionUpdate` (a string),
+        // with variant fields flattened alongside it — the official schema.
+        assert_eq!(v["params"]["update"]["sessionUpdate"], "agent_message_chunk");
         assert_eq!(
-            v["params"]["update"]["sessionUpdate"]["content"]["text"],
+            v["params"]["update"]["content"]["text"],
             "hello"
         );
+    }
+
+    #[test]
+    fn session_update_variants_match_official_schema() {
+        // Spot-check every builder against the tagged-union shape.
+        let v = session_update("s1", agent_thought_chunk(Some("m1"), "hmm"));
+        assert_eq!(v["params"]["update"]["sessionUpdate"], "agent_thought_chunk");
+        assert_eq!(v["params"]["update"]["messageId"], "m1");
+
+        let v = session_update("s1", tool_call_status("t1", "ls", "execute", "pending", Some("ls")));
+        assert_eq!(v["params"]["update"]["sessionUpdate"], "tool_call");
+        assert_eq!(v["params"]["update"]["toolCallId"], "t1");
+        assert_eq!(v["params"]["update"]["title"], "ls");
+        assert_eq!(v["params"]["update"]["rawInput"], "ls");
+        // Defaults are omitted.
+        assert!(v["params"]["update"].get("kind").is_none());
+        assert!(v["params"]["update"].get("status").is_none());
+
+        let v = session_update("s1", tool_call_update("t1", "in_progress", None));
+        assert_eq!(v["params"]["update"]["sessionUpdate"], "tool_call_update");
+        assert_eq!(v["params"]["update"]["status"], "in_progress");
+
+        let v = session_update("s1", tool_call_update("t1", "completed", Some(json!({"exit": 0}))));
+        assert_eq!(v["params"]["update"]["rawOutput"]["exit"], 0);
+
+        let v = session_update("s1", usage_update(10, 100));
+        assert_eq!(v["params"]["update"]["sessionUpdate"], "usage_update");
+        assert_eq!(v["params"]["update"]["used"], 10);
+        assert_eq!(v["params"]["update"]["size"], 100);
     }
 }

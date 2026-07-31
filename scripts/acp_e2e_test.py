@@ -184,13 +184,13 @@ def main() -> int:
         check("usage" in r and r["usage"].get("inputTokens") is not None,
               f"usage reported: {r.get('usage')}")
         chunks = [
-            m["params"]["update"]["sessionUpdate"]["content"]["text"]
+            m["params"]["update"]["content"]["text"]
             for m in client.notifications[before:]
-            if m["params"]["update"]["sessionUpdate"]["type"] == "agent_message_chunk"
+            if m["params"]["update"]["sessionUpdate"] == "agent_message_chunk"
         ]
         check(len(chunks) > 0, f"{len(chunks)} agent_message_chunk notifications")
         check("hello from e2e" in "".join(chunks), "chunks carry the mock echo of the prompt")
-        check(any(m["params"]["update"]["sessionUpdate"]["type"] == "usage_update"
+        check(any(m["params"]["update"]["sessionUpdate"] == "usage_update"
                   for m in client.notifications[before:]),
               "usage_update notification emitted")
 
@@ -203,9 +203,9 @@ def main() -> int:
         r = resp["result"]
         check(r.get("stopReason") == "end_turn", "second turn end_turn")
         text = "".join(
-            m["params"]["update"]["sessionUpdate"]["content"]["text"]
+            m["params"]["update"]["content"]["text"]
             for m in client.notifications
-            if m["params"]["update"]["sessionUpdate"]["type"] == "agent_message_chunk"
+            if m["params"]["update"]["sessionUpdate"] == "agent_message_chunk"
         )
         check("second turn" in text, "second turn echoed by the same session")
 
@@ -218,7 +218,7 @@ def main() -> int:
             "params": {"sessionId": sid, "prompt": [{"type": "text", "text": "cancel me"}]},
         })
         client.read_notification(
-            lambda m: m["params"]["update"]["sessionUpdate"]["type"] == "agent_message_chunk"
+            lambda m: m["params"]["update"]["sessionUpdate"] == "agent_message_chunk"
         )
         check(True, "first chunk streamed (turn is running)")
         client.notify("session/cancel", {"sessionId": sid})

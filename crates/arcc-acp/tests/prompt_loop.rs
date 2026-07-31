@@ -204,7 +204,8 @@ fn drain_updates(rx: &mut mpsc::UnboundedReceiver<Value>) -> Vec<Value> {
 }
 
 fn update_type(m: &Value) -> &str {
-    m["params"]["update"]["sessionUpdate"]["type"].as_str().unwrap_or("")
+    // The variant identifier IS the value of `sessionUpdate` (a string).
+    m["params"]["update"]["sessionUpdate"].as_str().unwrap_or("")
 }
 
 fn prompt_request(sid: &str, id: u64, text: &str) -> RpcRequest {
@@ -254,7 +255,7 @@ async fn text_turn_streams_chunks_and_reports_usage() {
     let text: String = msgs
         .iter()
         .filter(|m| update_type(m) == "agent_message_chunk")
-        .map(|m| m["params"]["update"]["sessionUpdate"]["content"]["text"].as_str().unwrap())
+        .map(|m| m["params"]["update"]["content"]["text"].as_str().unwrap())
         .collect();
     assert_eq!(text, "Hello world");
 
@@ -263,8 +264,8 @@ async fn text_turn_streams_chunks_and_reports_usage() {
         .find(|m| update_type(m) == "usage_update")
         .expect("usage_update notification")
         .clone();
-    assert!(usage_update["params"]["update"]["sessionUpdate"]["used"].as_u64().unwrap() > 0);
-    assert!(usage_update["params"]["update"]["sessionUpdate"]["size"].as_u64().unwrap() > 0);
+    assert!(usage_update["params"]["update"]["used"].as_u64().unwrap() > 0);
+    assert!(usage_update["params"]["update"]["size"].as_u64().unwrap() > 0);
 
     // Session history: user message + assistant reply, persisted.
     let s = handle.session.read().await;
@@ -338,18 +339,18 @@ async fn tool_call_with_allow_once_permission_executes() {
     let updates: Vec<Value> = msgs
         .iter()
         .filter(|m| m["method"] == "session/update")
-        .map(|m| m["params"]["update"]["sessionUpdate"].clone())
+        .map(|m| m["params"]["update"].clone())
         .collect();
     let statuses: Vec<&str> = updates
         .iter()
-        .filter(|u| u["type"] == "tool_call_update")
+        .filter(|u| u["sessionUpdate"] == "tool_call_update")
         .map(|u| u["status"].as_str().unwrap())
         .collect();
-    assert_eq!(statuses, ["running", "completed"]);
+    assert_eq!(statuses, ["in_progress", "completed"]);
 
     let completed = updates
         .iter()
-        .find(|u| u["type"] == "tool_call_update" && u["status"] == "completed")
+        .find(|u| u["sessionUpdate"] == "tool_call_update" && u["status"] == "completed")
         .unwrap();
     assert!(completed["rawOutput"]["exit_code"].is_number());
 

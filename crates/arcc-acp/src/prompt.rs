@@ -220,7 +220,7 @@ pub async fn run_prompt(
 
             let _ = outbound.send(protocol::session_update(
                 &session_id,
-                protocol::tool_call_status(&tc.id, &command, "shell", "pending", Some(&command)),
+                protocol::tool_call_status(&tc.id, &command, "execute", "pending", Some(&command)),
             ));
 
             // --- permission policy ---
@@ -251,9 +251,8 @@ pub async fn run_prompt(
                     &session_id,
                     protocol::tool_call_update(
                         &tc.id,
-                        "error",
-                        Some(json!({ "type": "text", "text": "rejected by user" })),
-                        None,
+                        "failed",
+                        Some(json!({ "error": "rejected by user" })),
                     ),
                 ));
                 continue;
@@ -265,7 +264,7 @@ pub async fn run_prompt(
             // future and `kill_on_drop` reaps the child process.
             let _ = outbound.send(protocol::session_update(
                 &session_id,
-                protocol::tool_call_update(&tc.id, "running", None, None),
+                protocol::tool_call_update(&tc.id, "in_progress", None),
             ));
             let al = ctx.allowlist.read().await;
             let executed = tokio::select! {
@@ -288,7 +287,6 @@ pub async fn run_prompt(
                         protocol::tool_call_update(
                             &tc.id,
                             "completed",
-                            Some(json!({ "type": "text", "text": output.stdout })),
                             Some(json!({
                                 "stdout": output.stdout,
                                 "stderr": output.stderr,
@@ -308,9 +306,8 @@ pub async fn run_prompt(
                         &session_id,
                         protocol::tool_call_update(
                             &tc.id,
-                            "error",
-                            Some(json!({ "type": "text", "text": format!("{e}") })),
-                            None,
+                            "failed",
+                            Some(json!({ "error": e.to_string() })),
                         ),
                     ));
                 }
@@ -360,8 +357,8 @@ async fn request_permission(
                 "rawInput": command,
             },
             "options": [
-                { "optionId": "allow_once", "name": "Allow once", "kind": "select" },
-                { "optionId": "reject_once", "name": "Reject", "kind": "select" },
+                { "optionId": "allow_once", "name": "Allow once", "kind": "allow_once" },
+                { "optionId": "reject_once", "name": "Reject", "kind": "reject_once" },
             ],
         },
     }));
