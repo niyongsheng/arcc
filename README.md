@@ -41,7 +41,7 @@
 | [**TUI**](doc/tutorial/tui-tutorial.md) | `arcc tui` | ✅ | — | ✅ | ✅ | — | — |
 | [**CLI**](doc/tutorial/cli-tutorial.md) | `arcc cli "<prompt>"` | — | — | ✅ | — | ✅ | — |
 | [**Server**](doc/tutorial/server-tutorial.md) | `arcc server --daemon` | ✅ | ✅ | ✅ | ✅ | — | ✅ |
-| **ACP** | `arcc --acp` | ✅ | — | ✅ | ✅ | — | — |
+| [**ACP**](doc/tutorial/acp-tutorial.md) | `arcc --acp` | ✅ | — | ✅ | ✅ | — | — |
 
 ## Quick Start
 
@@ -75,10 +75,12 @@ flowchart TB
     Entry(["arcc"]) --> TUI["arcc tui<br/>ratatui + crossterm"]
     Entry --> CLI["arcc cli<br/>one-shot / pipe"]
     Entry --> Server["arcc server<br/>axum + Feishu SSE"]
+    Entry --> ACP["arcc --acp<br/>ACP v1 stdio (AionUI)"]
 
     TUI --> Core["arcc-core"]
     CLI --> Core
     Server --> Core
+    ACP --> Core
 
     subgraph Core["arcc-core"]
         Model["ModelProvider<br/>DeepSeek-V4 Pro / Flash"]
