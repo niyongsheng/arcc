@@ -41,6 +41,12 @@ pub fn run(conn: &Connection) -> Result<(), rusqlite::Error> {
         conn.pragma_update(None, "user_version", 6)?;
     }
 
+    if version < 7 {
+        info!("running migration v7: add 'acp' mode to sessions");
+        conn.execute_batch(MIGRATION_V7)?;
+        conn.pragma_update(None, "user_version", 7)?;
+    }
+
     Ok(())
 }
 
@@ -172,4 +178,29 @@ ALTER TABLE scheduled_tasks_v6 RENAME TO scheduled_tasks;
 
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_due
     ON scheduled_tasks(status, next_run_at);
+"#;
+
+const MIGRATION_V7: &str = r#"
+-- Recreate sessions with 'acp' added to the mode CHECK constraint.
+-- SQLite cannot ALTER CHECK, so we recreate the table. Messages and
+-- other tables hold FK references to sessions(id), so foreign-key
+-- enforcement must be off while the parent table is being replaced.
+PRAGMA foreign_keys = OFF;
+
+CREATE TABLE IF NOT EXISTS sessions_v7 (
+    id              TEXT PRIMARY KEY,
+    name            TEXT NOT NULL,
+    mode            TEXT NOT NULL CHECK(mode IN ('tui','cli','server','feishu','acp')),
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    last_active_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+INSERT INTO sessions_v7
+    SELECT id, name, mode, created_at, last_active_at
+    FROM sessions;
+
+DROP TABLE sessions;
+ALTER TABLE sessions_v7 RENAME TO sessions;
+
+PRAGMA foreign_keys = ON;
 "#;

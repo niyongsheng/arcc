@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
@@ -16,8 +16,12 @@ struct Cli {
     #[arg(long, global = true, hide = true, alias = "unsafe")]
     dangerously_skip_permissions: bool,
 
+    /// Run as an ACP (Agent Client Protocol v1) stdio server
+    #[arg(long, global = true)]
+    acp: bool,
+
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Subcommand)]
@@ -45,9 +49,9 @@ enum Command {
 /// appenders (server mode). Dropping the guard flushes and shuts down
 /// the log writer.
 fn init_tracing(mode: &str) -> Option<WorkerGuard> {
-    // CLI mode: quieter logging — tool output goes to stdout via print!,
+    // CLI/ACP mode: quieter logging — tool output goes to stdout via print!,
     // debug tracing from the model layer would only create noise.
-    let default_filter = if mode == "cli" {
+    let default_filter = if mode == "cli" || mode == "acp" {
         "warn,arcc=info"
     } else {
         "info,arcc=debug"
@@ -116,10 +120,11 @@ fn arcc_home_log_dir() -> String {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    let mode = match cli.command {
-        Command::Tui => "tui",
-        Command::Cli { .. } => "cli",
-        Command::Server { .. } => "server",
+    let mode = match &cli.command {
+        Some(Command::Tui) => "tui",
+        Some(Command::Cli { .. }) => "cli",
+        Some(Command::Server { .. }) => "server",
+        None => "acp",
     };
 
     // Keep the WorkerGuard alive for the program's lifetime — dropping it
@@ -188,20 +193,29 @@ async fn main() -> anyhow::Result<()> {
     let ctx = Arc::new(AppContext::new(registry, storage, cli.dangerously_skip_permissions));
 
     // ---- dispatch ----
+    if cli.acp {
+        tracing::info!("starting ACP mode");
+        return arcc_acp::run(ctx).await;
+    }
     match cli.command {
-        Command::Tui => {
+        Some(Command::Tui) => {
             load_project_instructions(&ctx).await;
             tracing::info!("starting TUI mode");
             arcc_tui::run(ctx).await?;
         }
-        Command::Cli { prompt, json } => {
+        Some(Command::Cli { prompt, json }) => {
             let input = prompt.join(" ");
             tracing::info!(%input, json, "starting CLI mode");
             arcc_cli::run(ctx, &input, json).await?;
         }
-        Command::Server { daemon } => {
+        Some(Command::Server { daemon }) => {
             tracing::info!(daemon, "starting server mode");
             arcc_server::run(ctx, daemon).await?;
+        }
+        None => {
+            // No subcommand and no --acp: show help instead of doing nothing.
+            Cli::command().print_help()?;
+            println!();
         }
     }
 

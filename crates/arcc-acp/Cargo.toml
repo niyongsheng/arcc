@@ -1,0 +1,24 @@
+[package]
+name = "arcc-acp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "ACP (Agent Client Protocol v1) stdio server for ARCC — enables AionUI and other ACP clients to chat, stream, and run tools"
+
+[dependencies]
+arcc-core.workspace = true
+arcc-storage.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+futures.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+async-trait.workspace = true
+tempfile = "3"

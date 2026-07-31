@@ -349,6 +349,76 @@ pub async fn execute_command_with_config(
     })
 }
 
+/// Like `execute_command_with_config` but tailored for ACP sessions:
+/// runs in the session's working directory (`cwd`) and kills the child
+/// process if this future is dropped mid-flight (e.g. `session/cancel`
+/// while the tool is still executing).
+///
+/// The original function intentionally does NOT kill on drop — CLI/TUI
+/// callers depend on the orphaned process surviving when the 30s timeout
+/// fires. ACP cancellation must tear the process down, so this variant
+/// is a separate copy rather than a parameter on the shared one.
+pub async fn execute_command_acp(
+    cmd: &str,
+    cwd: &std::path::Path,
+    allowlist: &Allowlist,
+    skip_permissions: bool,
+    timeout_secs: u64,
+    max_bytes: usize,
+) -> Result<CommandOutput, ToolError> {
+    // --- safety check ---
+    if !skip_permissions && allowlist.check(cmd).unwrap_or(false) {
+        return Err(ToolError::RequiresConfirmation(
+            "command requires human confirmation".into(),
+        ));
+    }
+
+    // --- execute ---
+    let (shell, arg) = crate::system::shell_and_arg();
+
+    let child = tokio::process::Command::new(shell)
+        .arg(arg)
+        .arg(cmd)
+        .current_dir(cwd)
+        .kill_on_drop(true)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| ToolError::Spawn(e.to_string()))?;
+
+    // --- wait with timeout ---
+    let cmd_timeout = Duration::from_secs(timeout_secs);
+    let output = timeout(cmd_timeout, child.wait_with_output())
+        .await
+        .map_err(|_| ToolError::Timeout(timeout_secs))?
+        .map_err(|e| ToolError::Spawn(e.to_string()))?;
+
+    // --- capture and truncate ---
+    let mut stdout_str = String::from_utf8_lossy(&output.stdout).to_string();
+    let mut stderr_str = String::from_utf8_lossy(&output.stderr).to_string();
+    let mut truncated = false;
+
+    if stdout_str.len() > max_bytes {
+        let boundary = stdout_str.floor_char_boundary(max_bytes);
+        stdout_str.truncate(boundary);
+        stdout_str.push_str("\n... (truncated)");
+        truncated = true;
+    }
+    if stderr_str.len() > max_bytes {
+        let boundary = stderr_str.floor_char_boundary(max_bytes);
+        stderr_str.truncate(boundary);
+        stderr_str.push_str("\n... (truncated)");
+        truncated = true;
+    }
+
+    Ok(CommandOutput {
+        stdout: stdout_str,
+        stderr: stderr_str,
+        exit_code: output.status.code(),
+        truncated,
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Error types
 // ---------------------------------------------------------------------------

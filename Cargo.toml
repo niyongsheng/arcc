@@ -6,6 +6,7 @@ members = [
     "crates/arcc-server",
     "crates/arcc-tui",
     "crates/arcc-cli",
+    "crates/arcc-acp",
 ]
 
 [workspace.package]
@@ -17,6 +18,8 @@ repository = "https://github.com/niyongsheng/arcc"
 [workspace.dependencies]
 # --- async runtime ---
 tokio = { version = "1", features = ["full"] }
+# CancellationToken lives in tokio_util::sync — available with no features.
+tokio-util = "0.7"
 
 # --- serialization ---
 serde = { version = "1", features = ["derive"] }
@@ -72,6 +75,7 @@ arcc-storage = { path = "crates/arcc-storage" }
 arcc-server = { path = "crates/arcc-server" }
 arcc-tui = { path = "crates/arcc-tui" }
 arcc-cli = { path = "crates/arcc-cli" }
+arcc-acp = { path = "crates/arcc-acp" }
 
 [package]
 name = "arcc"
@@ -88,6 +92,7 @@ arcc-storage.workspace = true
 arcc-server.workspace = true
 arcc-tui.workspace = true
 arcc-cli.workspace = true
+arcc-acp.workspace = true
 tokio.workspace = true
 clap.workspace = true
 tracing.workspace = true

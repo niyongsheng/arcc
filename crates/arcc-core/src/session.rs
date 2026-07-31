@@ -328,6 +328,12 @@ impl Session {
         self.token_count
     }
 
+    /// The context window budget (tokens) this session may grow to before
+    /// compression kicks in. Used for ACP `usage_update` notifications.
+    pub fn context_max(&self) -> usize {
+        self.context_max_tokens
+    }
+
     /// Number of messages in the session.
     pub fn message_count(&self) -> usize {
         self.messages.len()

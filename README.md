@@ -18,12 +18,12 @@
 ## Features
 
 - **🤖 Dual-Model Scheduling** — Complex tasks → DeepSeek-V4-Pro (reasoning); routine chat → DeepSeek-V4-Flash (speed). Auto-rotate when context exceeds 800k tokens.
-- **🔌 MCP & ACP Protocols** — Native Model Context Protocol client for plugin tool registration. Agent Communication Protocol support for inter-agent collaboration.
+- **🔌 MCP & ACP Protocols** — Native Model Context Protocol client for plugin tool registration. ACP (Agent Client Protocol v1) stdio server via `arcc --acp` — ACP-compatible GUIs like AionUI get streaming chat, tool execution, and per-command permission prompts out of the box.
 - **🛡️ Safety Engine** — 3-layer defense: command allowlist → risk rating → TUI interactive confirm (y/a/n) for dangerous operations.
 - **💾 SQLite Persistence** — Sessions, messages, token usage persisted locally via rusqlite (bundled, zero system deps).
 - **📋 Audit Logging** — All command executions, MCP calls, and human approvals recorded to JSON Lines for traceability.
 - **🧠 Context Compression** — Automatic summarization at token threshold (default ~800k), preserving decisions and pending items.
-- **⚡ 3 Running Modes** — **TUI** (ratatui, ~60fps, multi-turn), **CLI** (one-shot/pipe, portable-pty), **Server** (axum, Feishu SSE webhook).
+- **⚡ 4 Running Modes** — **TUI** (ratatui, ~60fps, multi-turn), **CLI** (one-shot/pipe, portable-pty), **Server** (axum, Feishu SSE webhook), **ACP** (Agent Client Protocol stdio server for GUI agents).
 - **🔒 Local-First** — All data stays on your machine. No cloud sync, no telemetry, no external dependencies beyond the model API.
 
 ## Protocol Support
@@ -31,7 +31,7 @@
 | Protocol | Support | Purpose |
 |----------|:-------:|---------|
 | **MCP** (Model Context Protocol) | ✅ Client | Register external tools as MCP plugins |
-| **ACP** (Agent Communication Protocol) | ✅ | Inter-agent message routing & collaboration |
+| **ACP** (Agent Client Protocol v1) | ✅ Server | `arcc --acp` stdio agent — streaming chat, tool calls & permission prompts in AionUI and other ACP clients |
 | **SSE** (Server-Sent Events) | ✅ | IM bot push (Feishu webhook) |
 
 ## Running Modes
@@ -41,6 +41,7 @@
 | [**TUI**](doc/tutorial/tui-tutorial.md) | `arcc tui` | ✅ | — | ✅ | ✅ | — | — |
 | [**CLI**](doc/tutorial/cli-tutorial.md) | `arcc cli "<prompt>"` | — | — | ✅ | — | ✅ | — |
 | [**Server**](doc/tutorial/server-tutorial.md) | `arcc server --daemon` | ✅ | ✅ | ✅ | ✅ | — | ✅ |
+| **ACP** | `arcc --acp` | ✅ | — | ✅ | ✅ | — | — |
 
 ## Quick Start
 
