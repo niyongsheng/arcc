@@ -2,8 +2,8 @@
 
 # ARCC
 
-**[ARCC](https://juejin.cn/post/7650384140925812751) (A Rust Copilot CLI)** — Rust-based local-first AI Agent with CLI/TUI/Server modes, supports MCP & ACP protocols, connected to DeepSeek/Claude/OpenAI, built-in safety engine and SQLite persistence.  
-Rust 实现的终端 AI Agent，支持 CLI、TUI、Server 三种运行模式；兼容 MCP、ACP 协议；内置安全引擎，SQLite 做持久化存储。
+**[ARCC](https://juejin.cn/post/7650384140925812751) (A Rust Copilot CLI)** — a local-first terminal AI agent written in Rust. Runs as TUI, CLI, Server, or ACP stdio, speaks MCP & ACP, and connects to DeepSeek / Claude / OpenAI.  
+Rust 实现的终端 AI Agent，支持 CLI、TUI、Server、ACP 四种运行模式，兼容 MCP、ACP 协议。
 
 [![Rust](https://img.shields.io/badge/Rust-2024-%23DEA584?logo=rust)](https://www.rust-lang.org)
 [![DeepSeek](https://img.shields.io/badge/DeepSeek-V4-%234A90D9)](https://deepseek.com)
@@ -14,95 +14,48 @@ Rust 实现的终端 AI Agent，支持 CLI、TUI、Server 三种运行模式；�
 
 ![arcc tui demo](doc/arcc_tui_demo.gif)
 
----
-
 ## Features
 
-- **🤖 Dual-Model Scheduling** — Complex tasks → DeepSeek-V4-Pro (reasoning); routine chat → DeepSeek-V4-Flash (speed). Auto-rotate when context exceeds 800k tokens.
-- **🔌 MCP & ACP Protocols** — Native Model Context Protocol client for plugin tool registration. ACP (Agent Client Protocol v1) stdio server via `arcc --acp` — ACP-compatible GUIs like AionUI get streaming chat, tool execution, and per-command permission prompts out of the box.
-- **🛡️ Safety Engine** — 3-layer defense: command allowlist → risk rating → TUI interactive confirm (y/a/n) for dangerous operations.
-- **💾 SQLite Persistence** — Sessions, messages, token usage persisted locally via rusqlite (bundled, zero system deps).
-- **📋 Audit Logging** — All command executions, MCP calls, and human approvals recorded to JSON Lines for traceability.
-- **🧠 Context Compression** — Automatic summarization at token threshold (default ~800k), preserving decisions and pending items.
-- **⚡ 4 Running Modes** — **TUI** (ratatui, ~60fps, multi-turn), **CLI** (one-shot/pipe, portable-pty), **Server** (axum, Feishu SSE webhook), **ACP** (Agent Client Protocol stdio server for GUI agents).
-- **🔒 Local-First** — All data stays on your machine. No cloud sync, no telemetry, no external dependencies beyond the model API.
-
-## Protocol Support
-
-| Protocol | Support | Purpose |
-|----------|:-------:|---------|
-| **MCP** (Model Context Protocol) | ✅ Client | Register external tools as MCP plugins |
-| **ACP** (Agent Client Protocol v1) | ✅ Server | `arcc --acp` stdio agent — streaming chat, tool calls & permission prompts in AionUI and other ACP clients |
-| **SSE** (Server-Sent Events) | ✅ | IM bot push (Feishu webhook) |
+- **🤖 Dual-Model Scheduling** — DeepSeek-V4-Pro for complex reasoning, DeepSeek-V4-Flash for routine chat; context auto-compressed at ~800k tokens.
+- **🔌 MCP & ACP** — Native MCP client for plugin tools; ACP v1 stdio server (`arcc --acp`) for GUI agents like AionUI.
+- **🛡️ Safety Engine** — Command allowlist → risk rating → interactive confirmation (y/a/n) for dangerous operations.
+- **💾 Local-First Persistence** — SQLite for sessions/messages/tokens, JSON Lines for audit logs, TOML for config. No cloud, no telemetry.
 
 ## Running Modes
 
-| Mode | Command | Multi-Turn | Memory | Tool Call | Session Persist | Script/Pipe | IM Bot |
-|------|---------|:----------:|:------:|:---------:|:---------------:|:-----------:|:------:|
-| [**TUI**](doc/tutorial/tui-tutorial.md) | `arcc tui` | ✅ | — | ✅ | ✅ | — | — |
-| [**CLI**](doc/tutorial/cli-tutorial.md) | `arcc cli "<prompt>"` | — | — | ✅ | — | ✅ | — |
-| [**Server**](doc/tutorial/server-tutorial.md) | `arcc server --daemon` | ✅ | ✅ | ✅ | ✅ | — | ✅ |
-| [**ACP**](doc/tutorial/acp-tutorial.md) | `arcc --acp` | ✅ | — | ✅ | ✅ | — | — |
+| Mode | Command | Multi-Turn | Tool Call | Persist | Pipe/Script | IM Bot |
+|------|---------|:----------:|:---------:|:-------:|:-----------:|:------:|
+| [**TUI**](doc/tutorial/tui-tutorial.md) | `arcc tui` | ✅ | ✅ | ✅ | — | — |
+| [**CLI**](doc/tutorial/cli-tutorial.md) | `arcc cli "<prompt>"` | — | ✅ | — | ✅ | — |
+| [**Server**](doc/tutorial/server-tutorial.md) | `arcc server --daemon` | ✅ | ✅ | ✅ | — | ✅ |
+| [**ACP**](doc/tutorial/acp-tutorial.md) | `arcc --acp` | ✅ | ✅ | ✅ | — | — |
 
 ## Quick Start
 
-You need one [DeepSeek API Key](https://platform.deepseek.com)：
+You need a [DeepSeek API Key](https://platform.deepseek.com):
 
 ```bash
-# install
+# Install
 curl -fsSL https://raw.githubusercontent.com/niyongsheng/arcc/main/scripts/install.sh | bash
 
-# API Key
+# Configure
 echo '[model]
 api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"' > ~/.arcc/config.toml
 ```
-See [config/config.toml](config/config.toml) for all available options.
+
+See [config/config.toml](config/config.toml) for all options.
 
 ## Development
 
 ```bash
 cargo build                    # Debug build
-cargo run -- tui               # Start TUI interactive mode
-cargo run -- cli "<prompt>"    # CLI mode (single-turn, pipe-friendly)
-cargo run -- server --daemon   # Start server daemon
-
+cargo run -- tui               # TUI mode
+cargo run -- cli "<prompt>"    # CLI mode
+cargo run -- server --daemon   # Server daemon
 cargo build --release          # Release build
 ```
 
-## Architecture
-
-```mermaid
-flowchart TB
-    Entry(["arcc"]) --> TUI["arcc tui<br/>ratatui + crossterm"]
-    Entry --> CLI["arcc cli<br/>one-shot / pipe"]
-    Entry --> Server["arcc server<br/>axum + Feishu SSE"]
-    Entry --> ACP["arcc --acp<br/>ACP v1 stdio (AionUI)"]
-
-    TUI --> Core["arcc-core"]
-    CLI --> Core
-    Server --> Core
-    ACP --> Core
-
-    subgraph Core["arcc-core"]
-        Model["ModelProvider<br/>DeepSeek-V4 Pro / Flash"]
-        Safety["Safety Engine<br/>Allowlist + Risk Rating"]
-        Session["Session Manager<br/>Context Compression"]
-        Tools["Tool Executor<br/>MCP / Skill"]
-    end
-
-    Model --> DeepSeekPro["DeepSeek-V4-Pro<br/>Complex Reasoning"]
-    Model --> DeepSeekFlash["DeepSeek-V4-Flash<br/>High-Freq Dialogue"]
-
-    Core --> Storage["arcc-storage"]
-    
-    subgraph Storage["arcc-storage"]
-        SQLite["SQLite<br/>Sessions / Messages"]
-        Config["TOML<br/>Configuration"]
-        Audit["JSON Lines<br/>Audit Log"]
-    end
-
-    Tools --> MCP["MCP Plugins<br/>Model Context Protocol"]
-```
+Crates: `arcc-core` (models, tools, safety, session) · `arcc-tui` · `arcc-cli` · `arcc-server` · `arcc-storage`.
 
 ## License
 
