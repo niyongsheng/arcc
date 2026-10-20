@@ -36,7 +36,10 @@ impl MemoryManager {
     ///
     /// Panics on poison, matching the existing convention used by
     /// all CRUD methods.
-    fn with_db<T>(&self, f: impl FnOnce(&rusqlite::Connection) -> Result<T, MemoryError>) -> Result<T, MemoryError> {
+    fn with_db<T>(
+        &self,
+        f: impl FnOnce(&rusqlite::Connection) -> Result<T, MemoryError>,
+    ) -> Result<T, MemoryError> {
         let conn = self.db.lock().expect("db mutex poisoned");
         f(&conn)
     }
@@ -133,7 +136,8 @@ impl MemoryManager {
             return String::new();
         }
 
-        let mut out = String::from("## Known Facts\n\nThe following facts are known about you:\n\n");
+        let mut out =
+            String::from("## Known Facts\n\nThe following facts are known about you:\n\n");
         for fact in &facts {
             out.push_str(&format!("- {}: {}\n", fact.key, fact.value));
         }

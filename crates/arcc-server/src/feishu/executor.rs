@@ -33,19 +33,18 @@ impl FeishuTaskExecutor {
 #[async_trait]
 impl TaskExecutor for FeishuTaskExecutor {
     async fn execute(&self, task: &ScheduledTask) -> bool {
-        let trigger_prompt = format!(
-            "[Scheduled task trigger] {}",
-            task.task_description,
-        );
-        chat_queue().enqueue_scheduler(
-            self.ctx.clone(),
-            ChatEvent {
-                chat_id: task.chat_id.clone(),
-                chat_type: task.chat_type.clone(),
-                open_id: task.open_id.clone(),
-                message_id: String::new(),
-                user_text: trigger_prompt,
-            },
-        ).await
+        let trigger_prompt = format!("[Scheduled task trigger] {}", task.task_description,);
+        chat_queue()
+            .enqueue_scheduler(
+                self.ctx.clone(),
+                ChatEvent {
+                    chat_id: task.chat_id.clone(),
+                    chat_type: task.chat_type.clone(),
+                    open_id: task.open_id.clone(),
+                    message_id: String::new(),
+                    user_text: trigger_prompt,
+                },
+            )
+            .await
     }
 }

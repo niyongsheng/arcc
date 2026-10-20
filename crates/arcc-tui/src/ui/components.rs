@@ -1,4 +1,6 @@
+use crate::commands;
 use ratatui::{
+    Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
@@ -6,19 +8,17 @@ use ratatui::{
         BarChart, Block, Borders, Cell, Clear, LineGauge, List, ListItem, Paragraph, Row,
         Scrollbar, ScrollbarOrientation, ScrollbarState, Table,
     },
-    Frame,
 };
+use ratatui_markdown::RichTextTheme;
+use ratatui_markdown::highlight::{HighlightHooks, TreeSitterHighlighter};
 use ratatui_markdown::markdown::{MarkdownRenderer, RenderHooks};
 use ratatui_markdown::theme::ThemeConfig;
-use ratatui_markdown::highlight::{HighlightHooks, TreeSitterHighlighter};
 use ratatui_markdown::tree::{CollapsibleTree, KeyStyle};
-use std::sync::{Arc, LazyLock, Mutex};
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use ratatui_markdown::RichTextTheme;
+use std::sync::{Arc, LazyLock, Mutex};
 use tui_spinner::FluxFrames;
-use crate::commands;
 
 // ── Tree registry types ───────────────────────────────────────────────
 
@@ -65,11 +65,11 @@ pub struct SystemInfo {
 #[derive(Debug, Clone)]
 pub struct DashboardData {
     pub system: SystemInfo,
-    pub sessions: Vec<String>,             // formatted session rows (rendered as table)
-    pub session_ids: Vec<String>,           // full session UUIDs (for selection lookup)
+    pub sessions: Vec<String>, // formatted session rows (rendered as table)
+    pub session_ids: Vec<String>, // full session UUIDs (for selection lookup)
     pub session_count: usize,
     pub msg_count: usize,
-    pub token_daily: Vec<(String, u64)>,   // (date_label, total_tokens)
+    pub token_daily: Vec<(String, u64)>, // (date_label, total_tokens)
     pub total_input: i64,
     pub total_output: i64,
     pub audit_items: Vec<(String, String, bool)>, // (timestamp, label, ok)
@@ -137,7 +137,11 @@ impl TreeAwareHooks {
 
     /// Build and cache the three view modes for a new tree block.
     fn cache_block(&self, lang: &str, code: &str) -> Option<TreeRegistryEntry> {
-        let style = if lang == "json" { KeyStyle::Json } else { KeyStyle::Toml };
+        let style = if lang == "json" {
+            KeyStyle::Json
+        } else {
+            KeyStyle::Toml
+        };
         let mut tree = if lang == "json" {
             CollapsibleTree::from_json_str(code)?
         } else {
@@ -155,7 +159,9 @@ impl TreeAwareHooks {
         let expanded_lines = tree.render_lines(self.max_width, &ThemeConfig::default());
 
         // Raw: syntax-highlighted code block
-        let raw_lines = self.highlight.render_code_block(lang, code)
+        let raw_lines = self
+            .highlight
+            .render_code_block(lang, code)
             .unwrap_or_default();
 
         Some(TreeRegistryEntry {
@@ -197,7 +203,8 @@ impl RenderHooks for TreeAwareHooks {
         if is_focused {
             // Highlight the top border of the focused block with focused color.
             let mut themed = lines.to_vec();
-            let border_style = Style::default().fg(ThemeConfig::default().get_focused_border_color());
+            let border_style =
+                Style::default().fg(ThemeConfig::default().get_focused_border_color());
             if let Some(first) = themed.first_mut() {
                 for span in &mut first.spans {
                     if span.style.fg == Some(Color::DarkGray) {
@@ -274,8 +281,7 @@ pub fn render_chat(
             TreeRegistry::clone(tree_registry),
             focused_tree,
         );
-        MarkdownRenderer::new(area.width as usize)
-            .with_render_hooks(Box::new(hooks))
+        MarkdownRenderer::new(area.width as usize).with_render_hooks(Box::new(hooks))
     };
     let blocks = renderer.parse(&text);
     let lines = renderer.render(&blocks, &ThemeConfig::default());
@@ -372,17 +378,10 @@ pub fn render_input(f: &mut Frame, area: Rect, input: &str, status: &str) {
 
     let spans = if let Some(rest) = input.strip_prefix('/') {
         // Command mode — highlight the command name
-        let cmd_name = rest
-            .split_whitespace()
-            .next()
-            .unwrap_or("");
+        let cmd_name = rest.split_whitespace().next().unwrap_or("");
         let known = commands::find(cmd_name).is_some();
 
-        let cmd_color = if known {
-            Color::Cyan
-        } else {
-            Color::Red
-        };
+        let cmd_color = if known { Color::Cyan } else { Color::Red };
 
         let cmd_part = format!("/{cmd_name}");
         let args_start = cmd_part.len();
@@ -391,7 +390,10 @@ pub fn render_input(f: &mut Frame, area: Rect, input: &str, status: &str) {
         if known || !cmd_name.is_empty() {
             vec![
                 Span::styled("> ", Style::default().fg(prefix_color)),
-                Span::styled(cmd_part, Style::default().fg(cmd_color).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    cmd_part,
+                    Style::default().fg(cmd_color).add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(args_part, Style::default().fg(CLR_USER)),
             ]
         } else {
@@ -421,10 +423,7 @@ pub fn render_status(f: &mut Frame, area: Rect, status: &str, tick: u64, thinkin
     } else {
         spinner_char(status, tick).to_string()
     };
-    let text = Line::from(Span::styled(
-        format!(" {ch} {status}{thinking_tag}"),
-        style,
-    ));
+    let text = Line::from(Span::styled(format!(" {ch} {status}{thinking_tag}"), style));
     f.render_widget(Paragraph::new(text), area);
 }
 
@@ -468,12 +467,12 @@ pub fn main_layout(area: Rect) -> Vec<Rect> {
     Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),   // [0] session title
-            Constraint::Min(1),       // [1] chat area
-            Constraint::Length(1),   // [2] status bar
-            Constraint::Length(1),   // [3] divider
-            Constraint::Length(1),   // [4] input line
-            Constraint::Length(1),   // [5] bottom divider
+            Constraint::Length(1), // [0] session title
+            Constraint::Min(1),    // [1] chat area
+            Constraint::Length(1), // [2] status bar
+            Constraint::Length(1), // [3] divider
+            Constraint::Length(1), // [4] input line
+            Constraint::Length(1), // [5] bottom divider
         ])
         .split(area)
         .to_vec()
@@ -530,7 +529,11 @@ pub fn render_dashboard(
         .border_style(Style::new().fg(CLR_TOOL))
         .title(" 📊 Dashboard ")
         .title_alignment(Alignment::Center)
-        .title_style(Style::new().fg(CLR_DASH_ACCENT).add_modifier(Modifier::BOLD));
+        .title_style(
+            Style::new()
+                .fg(CLR_DASH_ACCENT)
+                .add_modifier(Modifier::BOLD),
+        );
     let inner = outer.inner(area);
     f.render_widget(outer, area);
 
@@ -551,21 +554,15 @@ pub fn render_dashboard(
     .split(inner);
 
     // ── Top row: System Info (left) + Token Gauges (right) ──
-    let top = Layout::horizontal([
-        Constraint::Percentage(50),
-        Constraint::Percentage(50),
-    ])
-    .split(vert[0]);
+    let top =
+        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(vert[0]);
 
     render_sys_panel(f, top[0], &data.system, live);
     render_token_panel(f, top[1], data.total_input, data.total_output);
 
     // ── Middle row: Daily Chart (left) + Audit (right) ──
-    let mid = Layout::horizontal([
-        Constraint::Percentage(60),
-        Constraint::Percentage(40),
-    ])
-    .split(vert[1]);
+    let mid =
+        Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)]).split(vert[1]);
 
     render_chart_panel(f, mid[0], &data.token_daily);
     render_audit_panel(f, mid[1], &data.audit_items);
@@ -578,12 +575,7 @@ pub fn render_dashboard(
 
 // ── Panel renderers ──────────────────────────────────────────────────
 
-fn render_sys_panel(
-    f: &mut Frame,
-    area: Rect,
-    sys: &SystemInfo,
-    live: &LiveMetrics,
-) {
+fn render_sys_panel(f: &mut Frame, area: Rect, sys: &SystemInfo, live: &LiveMetrics) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::new().fg(CLR_TOOL))
@@ -593,11 +585,7 @@ fn render_sys_panel(
     f.render_widget(block, area);
 
     // Top: text info (2 lines), bottom: live gauges (3 lines)
-    let chunks = Layout::vertical([
-        Constraint::Length(2),
-        Constraint::Length(3),
-    ])
-    .split(inner);
+    let chunks = Layout::vertical([Constraint::Length(2), Constraint::Length(3)]).split(inner);
 
     // ── Static text info ──
     let info_lines = vec![
@@ -608,7 +596,10 @@ fn render_sys_panel(
         Line::from(vec![
             Span::styled("Up  ", Style::new().fg(CLR_TOOL)),
             Span::styled(
-                format!("{}  ·  {} cores  ·  ARCC {}", sys.uptime, sys.cpu_count, sys.version),
+                format!(
+                    "{}  ·  {} cores  ·  ARCC {}",
+                    sys.uptime, sys.cpu_count, sys.version
+                ),
                 Style::new().fg(CLR_USER),
             ),
         ]),
@@ -637,7 +628,11 @@ fn render_sys_panel(
     let cpu_r = (live.cpu_pct / 100.0).clamp(0.0, 1.0);
     f.render_widget(
         LineGauge::default()
-            .filled_style(Style::new().fg(if live.cpu_pct > 80.0 { CLR_DASH_ERR } else { CLR_DASH_CHART }))
+            .filled_style(Style::new().fg(if live.cpu_pct > 80.0 {
+                CLR_DASH_ERR
+            } else {
+                CLR_DASH_CHART
+            }))
             .ratio(cpu_r)
             .label(format!("CPU {:>5.1}%", live.cpu_pct)),
         gauges[0],
@@ -687,7 +682,9 @@ fn render_token_panel(f: &mut Frame, area: Rect, total_input: i64, total_output:
 
     let summary_line = Line::from(Span::styled(
         format!("Total: {} tokens", fmt_num(total)),
-        Style::new().fg(CLR_DASH_ACCENT).add_modifier(Modifier::BOLD),
+        Style::new()
+            .fg(CLR_DASH_ACCENT)
+            .add_modifier(Modifier::BOLD),
     ));
 
     let gauge_area = Layout::vertical([
@@ -737,13 +734,15 @@ fn render_chart_panel(f: &mut Frame, area: Rect, daily: &[(String, u64)]) {
 
     // Build bar labels + values. Reverse so oldest is on the left.
     // We own the data so borrow it instead of moving.
-    let chart_pairs: Vec<(String, u64)> = daily
-        .iter()
-        .rev()
-        .map(|(l, v)| (l.clone(), *v))
-        .collect();
+    let chart_pairs: Vec<(String, u64)> =
+        daily.iter().rev().map(|(l, v)| (l.clone(), *v)).collect();
 
-    let max_v = chart_pairs.iter().map(|(_, v)| *v).max().unwrap_or(1).max(1);
+    let max_v = chart_pairs
+        .iter()
+        .map(|(_, v)| *v)
+        .max()
+        .unwrap_or(1)
+        .max(1);
 
     // Clamp bar count to fit area width
     let bar_w: u16 = 4;
@@ -799,11 +798,8 @@ fn render_audit_panel(f: &mut Frame, area: Rect, items: &[(String, String, bool)
         })
         .collect();
 
-    let list = List::new(list_items).highlight_style(
-        Style::new()
-            .fg(CLR_USER)
-            .add_modifier(Modifier::DIM),
-    );
+    let list = List::new(list_items)
+        .highlight_style(Style::new().fg(CLR_USER).add_modifier(Modifier::DIM));
     f.render_widget(list, inner);
 }
 
@@ -921,8 +917,7 @@ fn render_sessions_panel(
     // Scrollbar
     if n_rows > body_h {
         let max_scroll = n_rows.saturating_sub(body_h);
-        let mut state =
-            ScrollbarState::new(max_scroll).position(clamped_scroll.min(max_scroll));
+        let mut state = ScrollbarState::new(max_scroll).position(clamped_scroll.min(max_scroll));
 
         let scroll_area = Rect {
             x: inner.right().saturating_sub(1),

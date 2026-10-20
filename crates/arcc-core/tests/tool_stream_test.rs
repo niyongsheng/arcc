@@ -1,6 +1,6 @@
 use arcc_core::model::deepseek::DeepSeekProvider;
-use arcc_core::model::types::{ChatMessage, ChatRequest};
 use arcc_core::model::provider::ModelProvider;
+use arcc_core::model::types::{ChatMessage, ChatRequest};
 use arcc_core::tools;
 use futures::StreamExt;
 
@@ -12,11 +12,13 @@ async fn test_tool_call_stream() {
         return;
     }
     let provider = DeepSeekProvider::new("https://api.deepseek.com", &api_key, "deepseek-chat");
-    
+
     let req = ChatRequest {
         model: "deepseek-chat".into(),
         messages: vec![
-            ChatMessage::system("You are ARCC. Use execute_command tool. Always use it for system queries.".into()),
+            ChatMessage::system(
+                "You are ARCC. Use execute_command tool. Always use it for system queries.".into(),
+            ),
             ChatMessage::user("当前网络状态".into()),
         ],
         tools: Some(vec![tools::command_tool_definition()]),
@@ -27,10 +29,10 @@ async fn test_tool_call_stream() {
         thinking_mode: None,
         reasoning_effort: None,
     };
-    
+
     let mut stream = provider.chat_stream(req).await.expect("chat_stream");
     let mut tool_calls = vec![];
-    
+
     while let Some(chunk) = stream.next().await {
         match chunk {
             Ok(arcc_core::model::types::StreamChunk::Content(t)) => {
@@ -44,13 +46,16 @@ async fn test_tool_call_stream() {
                 eprintln!("[R]{t}");
             }
             Ok(arcc_core::model::types::StreamChunk::Finish(u)) => {
-                eprintln!("\n[FINISH] {}in {}out", u.prompt_tokens, u.completion_tokens);
+                eprintln!(
+                    "\n[FINISH] {}in {}out",
+                    u.prompt_tokens, u.completion_tokens
+                );
             }
             Ok(other) => eprintln!("[OTHER] {:?}", other),
             Err(e) => eprintln!("\n[ERR] {e}"),
         }
     }
-    
+
     assert!(!tool_calls.is_empty(), "Expected at least one tool call!");
     eprintln!("\n*** GOT {} TOOL CALL(S) ***", tool_calls.len());
 }

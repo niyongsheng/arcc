@@ -3,7 +3,7 @@
 //! All functions take a `&rusqlite::Connection` and are meant to be called
 //! from `ArccStorage` methods which manage the mutex lock.
 
-use rusqlite::{params, Connection, Result};
+use rusqlite::{Connection, Result, params};
 
 use super::models::{InputHistoryEntry, MemoryFact, Message, ScheduledTask, Session, Summary};
 
@@ -157,11 +157,7 @@ pub fn upsert_token_usage(
 }
 
 /// Update the summary text stored directly on the sessions row.
-pub fn update_session_summary(
-    conn: &Connection,
-    session_id: &str,
-    summary: &str,
-) -> Result<()> {
+pub fn update_session_summary(conn: &Connection, session_id: &str, summary: &str) -> Result<()> {
     conn.execute(
         "UPDATE sessions SET summary = ?2 WHERE id = ?1",
         params![session_id, summary],
@@ -170,11 +166,7 @@ pub fn update_session_summary(
 }
 
 /// Insert a user prompt into the input history table.
-pub fn insert_input_history(
-    conn: &Connection,
-    session_id: &str,
-    prompt: &str,
-) -> Result<()> {
+pub fn insert_input_history(conn: &Connection, session_id: &str, prompt: &str) -> Result<()> {
     conn.execute(
         "INSERT INTO input_history (session_id, prompt, created_at)
          VALUES (?1, ?2, datetime('now'))",
@@ -255,10 +247,7 @@ pub fn delete_memory(conn: &Connection, user_id: &str, key: &str) -> Result<bool
 
 /// Delete all memory facts for a user. Returns the number of rows deleted.
 pub fn clear_memories(conn: &Connection, user_id: &str) -> Result<usize> {
-    let n = conn.execute(
-        "DELETE FROM memories WHERE user_id = ?1",
-        params![user_id],
-    )?;
+    let n = conn.execute("DELETE FROM memories WHERE user_id = ?1", params![user_id])?;
     Ok(n)
 }
 
@@ -272,9 +261,16 @@ pub fn create_scheduled_task(conn: &Connection, task: &ScheduledTask) -> Result<
                                       created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, datetime('now'), datetime('now'))",
         params![
-            task.id, task.chat_id, task.chat_type, task.open_id,
-            task.reply_id, task.reply_id_type, task.cron, task.task_description,
-            task.status, task.next_run_at,
+            task.id,
+            task.chat_id,
+            task.chat_type,
+            task.open_id,
+            task.reply_id,
+            task.reply_id_type,
+            task.cron,
+            task.task_description,
+            task.status,
+            task.next_run_at,
         ],
     )?;
     Ok(())

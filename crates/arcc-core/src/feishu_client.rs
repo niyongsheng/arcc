@@ -64,7 +64,9 @@ impl FeishuClient {
         // Fetch a new token.
         let resp = self
             .client
-            .post(format!("{FEISHU_OPEN_API}/auth/v3/tenant_access_token/internal"))
+            .post(format!(
+                "{FEISHU_OPEN_API}/auth/v3/tenant_access_token/internal"
+            ))
             .json(&json!({
                 "app_id": self.app_id,
                 "app_secret": self.app_secret,
@@ -101,7 +103,8 @@ impl FeishuClient {
         content: serde_json::Value,
         msg_type: &str,
     ) -> Result<(), FeishuError> {
-        self.send_message_to(receive_id, "open_id", content, msg_type).await
+        self.send_message_to(receive_id, "open_id", content, msg_type)
+            .await
     }
 
     /// Send a message with explicit receive_id_type (`open_id` or `chat_id`).
@@ -156,9 +159,7 @@ impl FeishuClient {
 
         let body: serde_json::Value = self
             .client
-            .patch(format!(
-                "{FEISHU_OPEN_API}/im/v1/messages/{message_id}"
-            ))
+            .patch(format!("{FEISHU_OPEN_API}/im/v1/messages/{message_id}"))
             .header("Authorization", format!("Bearer {token}"))
             .json(&json!({
                 "content": serde_json::to_string(&content).unwrap_or_default(),

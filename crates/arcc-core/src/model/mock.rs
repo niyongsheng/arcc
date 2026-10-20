@@ -57,10 +57,8 @@ impl ModelProvider for MockProvider {
     async fn chat_stream(
         &self,
         req: ChatRequest,
-    ) -> Result<
-        Box<dyn Stream<Item = Result<StreamChunk, ModelError>> + Send + Unpin>,
-        ModelError,
-    > {
+    ) -> Result<Box<dyn Stream<Item = Result<StreamChunk, ModelError>> + Send + Unpin>, ModelError>
+    {
         let user_input = req
             .messages
             .last()
@@ -90,10 +88,12 @@ impl ModelProvider for MockProvider {
                 tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
             }
 
-            let _ = tx.send(Ok(StreamChunk::Finish(Usage {
-                prompt_tokens: user_input.len() as u32 / 3,
-                completion_tokens: response.len() as u32 / 3,
-            }))).await;
+            let _ = tx
+                .send(Ok(StreamChunk::Finish(Usage {
+                    prompt_tokens: user_input.len() as u32 / 3,
+                    completion_tokens: response.len() as u32 / 3,
+                })))
+                .await;
         });
 
         Ok(Box::new(ReceiverStream::new(rx)))

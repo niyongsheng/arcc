@@ -10,7 +10,7 @@
 use std::sync::Arc;
 
 use futures::StreamExt;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::{error, info};
 
@@ -110,7 +110,10 @@ pub async fn run_prompt(
                     &session_id,
                     protocol::agent_message_chunk(None, &format!("❌ {e}")),
                 ));
-                return PromptOutcome { stop_reason: "end_turn".into(), usage };
+                return PromptOutcome {
+                    stop_reason: "end_turn".into(),
+                    usage,
+                };
             }
         };
 
@@ -173,7 +176,10 @@ pub async fn run_prompt(
                         &session_id,
                         protocol::agent_message_chunk(None, &format!("❌ stream error: {e}")),
                     ));
-                    return PromptOutcome { stop_reason: "end_turn".into(), usage };
+                    return PromptOutcome {
+                        stop_reason: "end_turn".into(),
+                        usage,
+                    };
                 }
             }
         }
@@ -211,7 +217,10 @@ pub async fn run_prompt(
         }
 
         if tool_calls.is_empty() {
-            return PromptOutcome { stop_reason: "end_turn".into(), usage };
+            return PromptOutcome {
+                stop_reason: "end_turn".into(),
+                usage,
+            };
         }
 
         // Execute tool calls, one by one.
@@ -231,12 +240,17 @@ pub async fn run_prompt(
             if !skip_permissions {
                 let needs_confirm = ctx.allowlist.read().await.check(&command).unwrap_or(false);
                 if needs_confirm {
-                    match request_permission(&session_id, tc, &command, &outbound, &perms, &cancel).await {
+                    match request_permission(&session_id, tc, &command, &outbound, &perms, &cancel)
+                        .await
+                    {
                         PermissionOutcome::Allowed => {}
                         PermissionOutcome::Rejected => rejected = true,
                         PermissionOutcome::Cancelled => {
                             info!(%session_id, "permission request cancelled — aborting turn");
-                            return PromptOutcome { stop_reason: "cancelled".into(), usage };
+                            return PromptOutcome {
+                                stop_reason: "cancelled".into(),
+                                usage,
+                            };
                         }
                     }
                 }

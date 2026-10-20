@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use serde_json::Value;
-use tokio::sync::{oneshot, RwLock};
+use tokio::sync::{RwLock, oneshot};
 
 /// Registry of in-flight permission requests, keyed by outbound request id.
 #[derive(Default)]

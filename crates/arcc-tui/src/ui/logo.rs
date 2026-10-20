@@ -1,11 +1,11 @@
 //! ARCC ASCII logo — rendered as the first chat message on startup.
 
 use ratatui::{
+    Frame,
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::Paragraph,
-    Frame,
 };
 
 const LOGO_ART: &[&str] = &[
@@ -22,12 +22,12 @@ pub fn render_logo(f: &mut Frame, area: Rect, version: &str, model: &str) {
     let layout = Layout::default()
         .direction(ratatui::layout::Direction::Vertical)
         .constraints([
-            Constraint::Length(7),  // logo art + spacing
-            Constraint::Length(1),  // version
-            Constraint::Length(1),  // model
-            Constraint::Length(1),  // blank
-            Constraint::Length(1),  // hint
-            Constraint::Length(1),  // selection hint
+            Constraint::Length(7), // logo art + spacing
+            Constraint::Length(1), // version
+            Constraint::Length(1), // model
+            Constraint::Length(1), // blank
+            Constraint::Length(1), // hint
+            Constraint::Length(1), // selection hint
             Constraint::Min(0),
         ])
         .split(area);

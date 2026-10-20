@@ -67,11 +67,7 @@ pub fn build_denied_card(action: &str, details: &str) -> serde_json::Value {
 }
 
 /// Build a "allow / deny" confirmation card for high-risk operations.
-pub fn build_confirm_card(
-    session_id: &str,
-    action: &str,
-    details: &str,
-) -> ConfirmCard {
+pub fn build_confirm_card(session_id: &str, action: &str, details: &str) -> ConfirmCard {
     ConfirmCard {
         msg_type: "interactive".into(),
         content: ConfirmCardContent {

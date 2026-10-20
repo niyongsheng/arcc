@@ -17,12 +17,16 @@ use crate::feishu::executor::FeishuTaskExecutor;
 pub async fn run(ctx: SharedContext, daemon: bool) -> anyhow::Result<()> {
     let addr: SocketAddr = format!(
         "{}:{}",
-        ctx.storage.config.server.host,
-        ctx.storage.config.server.port
+        ctx.storage.config.server.host, ctx.storage.config.server.port
     )
     .parse()
-    .map_err(|e| anyhow::anyhow!("invalid server bind address '{}:{}': {e}",
-        ctx.storage.config.server.host, ctx.storage.config.server.port))?;
+    .map_err(|e| {
+        anyhow::anyhow!(
+            "invalid server bind address '{}:{}': {e}",
+            ctx.storage.config.server.host,
+            ctx.storage.config.server.port
+        )
+    })?;
 
     // Spawn the background scheduler (only when feishu is configured).
     if ctx.feishu_client.is_some() {
@@ -47,30 +51,31 @@ pub async fn run(ctx: SharedContext, daemon: bool) -> anyhow::Result<()> {
 }
 
 fn build_router(ctx: SharedContext) -> axum::Router {
-    use axum::routing::{get, post, put};
     use axum::middleware;
+    use axum::routing::{get, post, put};
 
     // Public routes (no auth required).
-    let mut router = axum::Router::new()
-        .route("/health", get(routes::health::handler));
+    let mut router = axum::Router::new().route("/health", get(routes::health::handler));
 
     // Protected routes — require API key when configured.
     let mut protected = axum::Router::new()
         .route("/chat", post(routes::chat::handler))
-        .route("/memory/{user_id}", get(routes::memory::list_memories)
-            .post(routes::memory::create_memory))
-        .route("/memory/{user_id}/{key}", put(routes::memory::update_memory)
-            .delete(routes::memory::delete_memory));
+        .route(
+            "/memory/{user_id}",
+            get(routes::memory::list_memories).post(routes::memory::create_memory),
+        )
+        .route(
+            "/memory/{user_id}/{key}",
+            put(routes::memory::update_memory).delete(routes::memory::delete_memory),
+        );
     // Only add feishu send to protected routes when feishu is configured.
     if ctx.feishu_client.is_some() {
-        protected = protected
-            .route("/feishu/send", post(feishu::webhook::send_handler));
+        protected = protected.route("/feishu/send", post(feishu::webhook::send_handler));
     }
-    protected = protected
-        .route_layer(middleware::from_fn_with_state(
-            ctx.clone(),
-            crate::middleware::require_api_key,
-        ));
+    protected = protected.route_layer(middleware::from_fn_with_state(
+        ctx.clone(),
+        crate::middleware::require_api_key,
+    ));
 
     router = router.merge(protected);
 
@@ -78,8 +83,7 @@ fn build_router(ctx: SharedContext) -> axum::Router {
     // Webhook uses its own verification_token (no API key required).
     // `/feishu/send` is added to the protected group below.
     if ctx.feishu_client.is_some() {
-        router = router
-            .route("/feishu/webhook", post(feishu::webhook::handler));
+        router = router.route("/feishu/webhook", post(feishu::webhook::handler));
     }
 
     router.with_state(ctx)

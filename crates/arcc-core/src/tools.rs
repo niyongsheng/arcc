@@ -285,7 +285,14 @@ pub async fn execute_command(
     allowlist: &Allowlist,
     skip_permissions: bool,
 ) -> Result<CommandOutput, ToolError> {
-    self::execute_command_with_config(cmd, allowlist, skip_permissions, DEFAULT_TIMEOUT_SECS, DEFAULT_MAX_BYTES).await
+    self::execute_command_with_config(
+        cmd,
+        allowlist,
+        skip_permissions,
+        DEFAULT_TIMEOUT_SECS,
+        DEFAULT_MAX_BYTES,
+    )
+    .await
 }
 
 /// Like `execute_command` but with explicit timeout and output limits.

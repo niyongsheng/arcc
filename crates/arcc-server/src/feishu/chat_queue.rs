@@ -76,7 +76,8 @@ impl ChatQueue {
     /// same semantics as `process_feishu_chat`'s return value).
     pub async fn enqueue_scheduler(&self, ctx: SharedContext, event: ChatEvent) -> bool {
         let (tx, rx) = oneshot::channel();
-        self.enqueue_inner(ctx, QueueMsg::Scheduler(event, tx)).await;
+        self.enqueue_inner(ctx, QueueMsg::Scheduler(event, tx))
+            .await;
         rx.await.unwrap_or(false)
     }
 

@@ -10,7 +10,7 @@
 //! plain data + builders — no I/O.
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 // ---------------------------------------------------------------------------
 // JSON-RPC error codes
@@ -185,11 +185,7 @@ pub fn tool_call_status(
 /// (the official `ToolCallStatus`). Arbitrary per-tool results go in
 /// `rawOutput` — the official `content` field is a `ToolCallContent`
 /// array with its own tagging rules, which we deliberately avoid.
-pub fn tool_call_update(
-    tool_call_id: &str,
-    status: &str,
-    raw_output: Option<Value>,
-) -> Value {
+pub fn tool_call_update(tool_call_id: &str, status: &str, raw_output: Option<Value>) -> Value {
     let mut update = json!({
         "sessionUpdate": "tool_call_update",
         "toolCallId": tool_call_id,
@@ -218,7 +214,9 @@ pub fn usage_update(used: usize, size: usize) -> Value {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlock {
-    Text { text: String },
+    Text {
+        text: String,
+    },
     #[serde(other)]
     Other,
 }
@@ -265,21 +263,27 @@ mod tests {
         assert_eq!(v["params"]["sessionId"], "s1");
         // The variant identifier is the value of `sessionUpdate` (a string),
         // with variant fields flattened alongside it — the official schema.
-        assert_eq!(v["params"]["update"]["sessionUpdate"], "agent_message_chunk");
         assert_eq!(
-            v["params"]["update"]["content"]["text"],
-            "hello"
+            v["params"]["update"]["sessionUpdate"],
+            "agent_message_chunk"
         );
+        assert_eq!(v["params"]["update"]["content"]["text"], "hello");
     }
 
     #[test]
     fn session_update_variants_match_official_schema() {
         // Spot-check every builder against the tagged-union shape.
         let v = session_update("s1", agent_thought_chunk(Some("m1"), "hmm"));
-        assert_eq!(v["params"]["update"]["sessionUpdate"], "agent_thought_chunk");
+        assert_eq!(
+            v["params"]["update"]["sessionUpdate"],
+            "agent_thought_chunk"
+        );
         assert_eq!(v["params"]["update"]["messageId"], "m1");
 
-        let v = session_update("s1", tool_call_status("t1", "ls", "execute", "pending", Some("ls")));
+        let v = session_update(
+            "s1",
+            tool_call_status("t1", "ls", "execute", "pending", Some("ls")),
+        );
         assert_eq!(v["params"]["update"]["sessionUpdate"], "tool_call");
         assert_eq!(v["params"]["update"]["toolCallId"], "t1");
         assert_eq!(v["params"]["update"]["title"], "ls");
@@ -292,7 +296,10 @@ mod tests {
         assert_eq!(v["params"]["update"]["sessionUpdate"], "tool_call_update");
         assert_eq!(v["params"]["update"]["status"], "in_progress");
 
-        let v = session_update("s1", tool_call_update("t1", "completed", Some(json!({"exit": 0}))));
+        let v = session_update(
+            "s1",
+            tool_call_update("t1", "completed", Some(json!({"exit": 0}))),
+        );
         assert_eq!(v["params"]["update"]["rawOutput"]["exit"], 0);
 
         let v = session_update("s1", usage_update(10, 100));

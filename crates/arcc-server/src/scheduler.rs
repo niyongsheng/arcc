@@ -57,7 +57,9 @@ pub async fn scheduler_loop(ctx: SharedContext, executor: Arc<dyn TaskExecutor>)
 
         // Compress overgrown sessions every hour (~360 ticks).
         // This is an LLM call (flash model) so we don't want it on every tick.
-        if tick_count.is_multiple_of(360) && let Some(flash) = ctx.providers.flash() {
+        if tick_count.is_multiple_of(360)
+            && let Some(flash) = ctx.providers.flash()
+        {
             ctx.sessions.compress_all(flash.as_ref()).await;
         }
 
@@ -87,11 +89,19 @@ pub async fn scheduler_loop(ctx: SharedContext, executor: Arc<dyn TaskExecutor>)
                 let fails = retry_count.entry(task_id.clone()).or_insert(0);
                 *fails += 1;
                 if *fails >= MAX_CONSECUTIVE_FAILURES {
-                    warn!(task_id, retries = *fails, "scheduler: too many consecutive failures, marking failed");
+                    warn!(
+                        task_id,
+                        retries = *fails,
+                        "scheduler: too many consecutive failures, marking failed"
+                    );
                     let _ = ctx.storage.update_task_status(&task_id, "failed");
                     continue;
                 }
-                warn!(task_id, retries = *fails, "scheduler: task execution failed, will retry");
+                warn!(
+                    task_id,
+                    retries = *fails,
+                    "scheduler: task execution failed, will retry"
+                );
                 if let Err(e) = ctx.storage.update_task_status(&task_id, "pending") {
                     warn!(task_id, err = %e, "scheduler: failed to reset task status");
                 }
@@ -111,7 +121,10 @@ pub async fn scheduler_loop(ctx: SharedContext, executor: Arc<dyn TaskExecutor>)
                             }
                             info!(task_id, next_run = %next_str, "scheduler: recurring task updated");
                         } else {
-                            warn!(task_id, "scheduler: cron has no future occurrences, marking completed");
+                            warn!(
+                                task_id,
+                                "scheduler: cron has no future occurrences, marking completed"
+                            );
                             let _ = ctx.storage.update_task_status(&task_id, "completed");
                         }
                     }

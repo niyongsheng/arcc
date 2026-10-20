@@ -968,8 +968,7 @@ impl App {
                     }
                     "status" => {
                         let state = if self.mouse_capture { "on" } else { "off" };
-                        self.messages
-                            .push(format!("🤖 Mouse capture: **{state}**"));
+                        self.messages.push(format!("🤖 Mouse capture: **{state}**"));
                     }
                     other => self.messages.push(format!(
                         "🤖 Usage: `/mouse [on/off/status]` (unknown subcommand: {other})"
@@ -1672,7 +1671,8 @@ async fn run_tool_calling_loop(
                                     &command,
                                     "[y] approve · [a] allow always · [n] reject",
                                 ),
-                                hint: "**[y]** approve · **[a]** allow always · **[n]** reject".into(),
+                                hint: "**[y]** approve · **[a]** allow always · **[n]** reject"
+                                    .into(),
                                 response_tx: resp_tx,
                             }));
                             let answer = resp_rx.await.unwrap_or(None);

@@ -54,19 +54,43 @@ impl ProviderRegistry {
         /// Keywords suggesting the user needs deep reasoning.
         const COMPLEXITY_KEYWORDS: &[&str] = &[
             // Chinese
-            "分析", "为什么", "根因", "调试", "优化", "设计", "架构",
-            "比较", "解释", "如何实现", "对比", "总结", "评估", "预测",
-            "推理", "规划", "方案", "原理", "机制", "区别",
+            "分析",
+            "为什么",
+            "根因",
+            "调试",
+            "优化",
+            "设计",
+            "架构",
+            "比较",
+            "解释",
+            "如何实现",
+            "对比",
+            "总结",
+            "评估",
+            "预测",
+            "推理",
+            "规划",
+            "方案",
+            "原理",
+            "机制",
+            "区别",
             // English
-            "analyze", "why", "root cause", "debug", "optimize",
-            "design", "architecture", "refactor", "explain",
-            "compare", "performance", "security",
+            "analyze",
+            "why",
+            "root cause",
+            "debug",
+            "optimize",
+            "design",
+            "architecture",
+            "refactor",
+            "explain",
+            "compare",
+            "performance",
+            "security",
         ];
 
         let lower = prompt.to_lowercase();
-        let has_complex_keyword = COMPLEXITY_KEYWORDS
-            .iter()
-            .any(|k| lower.contains(k));
+        let has_complex_keyword = COMPLEXITY_KEYWORDS.iter().any(|k| lower.contains(k));
 
         if prompt.len() > 256 || (prompt.len() > 30 && has_complex_keyword) {
             self.pro()

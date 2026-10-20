@@ -21,10 +21,10 @@ pub mod session;
 
 use std::io::Write as _;
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::mpsc;
 use tracing::{info, warn};
@@ -271,7 +271,8 @@ pub async fn handle_request(
             let perms2 = Arc::clone(perms);
             let out_tx2 = out_tx.clone();
             tokio::spawn(async move {
-                let outcome = prompt::run_prompt(&ctx2, handle2.clone(), text, out_tx2.clone(), perms2).await;
+                let outcome =
+                    prompt::run_prompt(&ctx2, handle2.clone(), text, out_tx2.clone(), perms2).await;
                 // Release the guard BEFORE the response lands, so a queued
                 // follow-up prompt is not spuriously rejected.
                 handle2.running.store(false, Ordering::SeqCst);

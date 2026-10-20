@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::Stream;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 use arcc_acp::handle_request;
@@ -86,21 +86,20 @@ impl ModelProvider for ScriptedProvider {
     async fn chat_stream(
         &self,
         req: ChatRequest,
-    ) -> Result<Box<dyn Stream<Item = Result<StreamChunk, ModelError>> + Send + Unpin>, ModelError> {
-        let script = self
-            .scripts
-            .lock()
-            .unwrap()
-            .pop_front()
-            .unwrap_or_else(|| vec![ChunkScript::Content("(fallback)"), ChunkScript::Finish(1, 1)]);
+    ) -> Result<Box<dyn Stream<Item = Result<StreamChunk, ModelError>> + Send + Unpin>, ModelError>
+    {
+        let script = self.scripts.lock().unwrap().pop_front().unwrap_or_else(|| {
+            vec![
+                ChunkScript::Content("(fallback)"),
+                ChunkScript::Finish(1, 1),
+            ]
+        });
 
         let (tx, rx) = tokio::sync::mpsc::channel::<Result<StreamChunk, ModelError>>(32);
         tokio::spawn(async move {
             for step in script {
                 match step {
-                    ChunkScript::Sleep(ms) => {
-                        tokio::time::sleep(Duration::from_millis(ms)).await
-                    }
+                    ChunkScript::Sleep(ms) => tokio::time::sleep(Duration::from_millis(ms)).await,
                     ChunkScript::Content(text) => {
                         let _ = tx.send(Ok(StreamChunk::Content(text.to_string()))).await;
                     }
@@ -178,8 +177,7 @@ fn setup(flash_scripts: Vec<Vec<ChunkScript>>) -> TestEnv {
     let pro_name = storage.config.model.pro_model.clone();
     let flash_name = storage.config.model.flash_model.clone();
 
-    let flash: Arc<dyn ModelProvider> =
-        Arc::new(ScriptedProvider::new(&flash_name, flash_scripts));
+    let flash: Arc<dyn ModelProvider> = Arc::new(ScriptedProvider::new(&flash_name, flash_scripts));
     let pro: Arc<dyn ModelProvider> = Arc::new(ScriptedProvider::new(&pro_name, vec![]));
     let mut registry = ProviderRegistry::new(&pro_name, &flash_name);
     registry.register(&pro_name, pro);
@@ -205,7 +203,9 @@ fn drain_updates(rx: &mut mpsc::UnboundedReceiver<Value>) -> Vec<Value> {
 
 fn update_type(m: &Value) -> &str {
     // The variant identifier IS the value of `sessionUpdate` (a string).
-    m["params"]["update"]["sessionUpdate"].as_str().unwrap_or("")
+    m["params"]["update"]["sessionUpdate"]
+        .as_str()
+        .unwrap_or("")
 }
 
 fn prompt_request(sid: &str, id: u64, text: &str) -> RpcRequest {
@@ -239,7 +239,14 @@ async fn text_turn_streams_chunks_and_reports_usage() {
     let handle = registry.create(&env.ctx, env.cwd.clone()).await;
     let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Value>();
 
-    let outcome = prompt::run_prompt(&env.ctx, handle.clone(), "hi".into(), out_tx, Arc::new(PermRegistry::new())).await;
+    let outcome = prompt::run_prompt(
+        &env.ctx,
+        handle.clone(),
+        "hi".into(),
+        out_tx,
+        Arc::new(PermRegistry::new()),
+    )
+    .await;
 
     assert_eq!(outcome.stop_reason, "end_turn");
     let usage = outcome.usage.expect("usage reported");
@@ -250,7 +257,12 @@ async fn text_turn_streams_chunks_and_reports_usage() {
     let types: Vec<&str> = msgs.iter().map(update_type).collect();
     assert_eq!(
         types,
-        ["agent_thought_chunk", "agent_message_chunk", "agent_message_chunk", "usage_update"]
+        [
+            "agent_thought_chunk",
+            "agent_message_chunk",
+            "agent_message_chunk",
+            "usage_update"
+        ]
     );
     let text: String = msgs
         .iter()
@@ -279,7 +291,10 @@ async fn text_turn_streams_chunks_and_reports_usage() {
 #[tokio::test]
 async fn tool_call_with_allow_once_permission_executes() {
     let env = setup(vec![
-        vec![ChunkScript::ToolCall("rm --help"), ChunkScript::Finish(5, 1)],
+        vec![
+            ChunkScript::ToolCall("rm --help"),
+            ChunkScript::Finish(5, 1),
+        ],
         vec![ChunkScript::Content("done"), ChunkScript::Finish(1, 1)],
     ]);
     let registry = Arc::new(AcpSessionRegistry::new());
@@ -363,8 +378,14 @@ async fn tool_call_with_allow_once_permission_executes() {
 #[tokio::test]
 async fn tool_call_with_reject_permission_is_skipped() {
     let env = setup(vec![
-        vec![ChunkScript::ToolCall("rm --help"), ChunkScript::Finish(1, 1)],
-        vec![ChunkScript::Content("skipped it"), ChunkScript::Finish(1, 1)],
+        vec![
+            ChunkScript::ToolCall("rm --help"),
+            ChunkScript::Finish(1, 1),
+        ],
+        vec![
+            ChunkScript::Content("skipped it"),
+            ChunkScript::Finish(1, 1),
+        ],
     ]);
     let registry = Arc::new(AcpSessionRegistry::new());
     let handle = registry.create(&env.ctx, env.cwd.clone()).await;
@@ -518,12 +539,25 @@ async fn concurrent_prompt_rejected_with_busy_guard() {
     let perms = Arc::new(PermRegistry::new());
     let (out_tx, _out_rx) = mpsc::unbounded_channel();
 
-    let r1 = handle_request(&env.ctx, prompt_request(&sid, 1, "one"), &registry, &perms, &out_tx).await;
+    let r1 = handle_request(
+        &env.ctx,
+        prompt_request(&sid, 1, "one"),
+        &registry,
+        &perms,
+        &out_tx,
+    )
+    .await;
     assert!(r1.is_none(), "first prompt defers its response");
 
-    let r2 = handle_request(&env.ctx, prompt_request(&sid, 2, "two"), &registry, &perms, &out_tx)
-        .await
-        .expect("second prompt responds immediately");
+    let r2 = handle_request(
+        &env.ctx,
+        prompt_request(&sid, 2, "two"),
+        &registry,
+        &perms,
+        &out_tx,
+    )
+    .await
+    .expect("second prompt responds immediately");
     assert_eq!(r2["error"]["code"], -32004);
 
     // Wait for the first turn to finish…
@@ -536,7 +570,14 @@ async fn concurrent_prompt_rejected_with_busy_guard() {
     .expect("first prompt never finished");
 
     // …and the session accepts prompts again.
-    let r3 = handle_request(&env.ctx, prompt_request(&sid, 3, "three"), &registry, &perms, &out_tx).await;
+    let r3 = handle_request(
+        &env.ctx,
+        prompt_request(&sid, 3, "three"),
+        &registry,
+        &perms,
+        &out_tx,
+    )
+    .await;
     assert!(r3.is_none(), "session free again after the turn completed");
 }
 
@@ -544,7 +585,10 @@ async fn concurrent_prompt_rejected_with_busy_guard() {
 /// subsequent prompts for that id are rejected with -32001.
 #[tokio::test]
 async fn close_cancels_and_removes_session() {
-    let env = setup(vec![vec![ChunkScript::Sleep(60_000), ChunkScript::Finish(1, 1)]]);
+    let env = setup(vec![vec![
+        ChunkScript::Sleep(60_000),
+        ChunkScript::Finish(1, 1),
+    ]]);
     let registry = Arc::new(AcpSessionRegistry::new());
     let handle = registry.create(&env.ctx, env.cwd.clone()).await;
     let sid = handle.id().await;
@@ -552,7 +596,14 @@ async fn close_cancels_and_removes_session() {
     let (out_tx, _out_rx) = mpsc::unbounded_channel();
 
     // Start a long prompt, then close the session underneath it.
-    let _r1 = handle_request(&env.ctx, prompt_request(&sid, 1, "one"), &registry, &perms, &out_tx).await;
+    let _r1 = handle_request(
+        &env.ctx,
+        prompt_request(&sid, 1, "one"),
+        &registry,
+        &perms,
+        &out_tx,
+    )
+    .await;
     let close = RpcRequest {
         jsonrpc: "2.0".into(),
         id: Some(json!(2)),
@@ -565,7 +616,14 @@ async fn close_cancels_and_removes_session() {
     assert!(r2["result"].is_object());
 
     // The session is gone — prompts and re-close both fail with -32001.
-    let r3 = handle_request(&env.ctx, prompt_request(&sid, 3, "three"), &registry, &perms, &out_tx).await;
+    let r3 = handle_request(
+        &env.ctx,
+        prompt_request(&sid, 3, "three"),
+        &registry,
+        &perms,
+        &out_tx,
+    )
+    .await;
     assert_eq!(r3.unwrap()["error"]["code"], -32001);
     assert!(registry.get(&sid).await.is_none());
 }

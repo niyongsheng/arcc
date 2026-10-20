@@ -22,8 +22,7 @@ pub fn spawn_input_handler(tx: mpsc::UnboundedSender<AppEvent>) -> tokio::task::
 
             match event::read() {
                 Ok(CrosstermEvent::Key(key))
-                    if key.kind == KeyEventKind::Press
-                        || key.kind == KeyEventKind::Repeat =>
+                    if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat =>
                 {
                     match key.code {
                         KeyCode::Char('c')
@@ -105,7 +104,7 @@ pub fn spawn_input_handler(tx: mpsc::UnboundedSender<AppEvent>) -> tokio::task::
                     // Ignore click, drag, and move events — text selection
                     // works by holding Shift when mouse capture is enabled.
                     _ => {}
-                }
+                },
                 Ok(CrosstermEvent::Resize(cols, rows)) => {
                     let _ = tx.send(AppEvent::Resize { cols, rows });
                 }

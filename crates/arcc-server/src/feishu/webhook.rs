@@ -10,10 +10,7 @@
 //! Also exports a `send` handler for proactively sending messages to Feishu
 //! (useful for testing and notifications).
 
-use axum::{
-    extract::State,
-    Json,
-};
+use axum::{Json, extract::State};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tracing::{error, info, warn};
@@ -63,9 +60,7 @@ fn sanitize_history(history: &mut Vec<ChatMessage>) {
             i += 1;
             continue;
         }
-        let Some(tool_calls) = history[i].tool_calls.as_ref()
-            .filter(|c| !c.is_empty())
-        else {
+        let Some(tool_calls) = history[i].tool_calls.as_ref().filter(|c| !c.is_empty()) else {
             i += 1;
             continue;
         };
@@ -73,9 +68,7 @@ fn sanitize_history(history: &mut Vec<ChatMessage>) {
 
         // Count how many consecutive tool messages follow this assistant.
         let mut tool_count = 0;
-        while i + 1 + tool_count < history.len()
-            && history[i + 1 + tool_count].role == "tool"
-        {
+        while i + 1 + tool_count < history.len() && history[i + 1 + tool_count].role == "tool" {
             tool_count += 1;
         }
 
@@ -147,36 +140,36 @@ async fn handle_schedule_task(
     let delay = tc.arguments.get("delay_seconds").and_then(|v| v.as_i64());
     let task = tc.arguments["task"].as_str().unwrap_or("");
 
-    let (task_cron, next_run_str) =
-        if let Some(delay_secs) = delay {
-            let fire_at = chrono::Local::now()
-                .checked_add_signed(chrono::Duration::seconds(delay_secs))
-                .expect("valid duration");
-            let formatted = fire_at.format("%Y-%m-%d %H:%M:%S").to_string();
-            (None, formatted)
-        } else if let Some(cron_expr) = cron {
-            let schedule = match cron::Schedule::from_str(cron_expr) {
-                Ok(s) => s,
-                Err(e) => {
-                    warn!(cron_expr, err = %e, "invalid cron expression");
-                    return (false, format!("Invalid cron expression '{cron_expr}': {e}"));
-                }
-            };
-            let local = match schedule.upcoming(chrono::Local).next() {
-                Some(t) => t,
-                None => {
-                    warn!(cron_expr, "cron expression never repeats");
-                    return (false, "Cron expression never repeats (no future occurrence).".into());
-                }
-            };
-            let formatted = local.format("%Y-%m-%d %H:%M:%S").to_string();
-            (Some(cron_expr.to_owned()), formatted)
-        } else {
-            let formatted = chrono::Local::now()
-                .format("%Y-%m-%d %H:%M:%S")
-                .to_string();
-            (None, formatted)
+    let (task_cron, next_run_str) = if let Some(delay_secs) = delay {
+        let fire_at = chrono::Local::now()
+            .checked_add_signed(chrono::Duration::seconds(delay_secs))
+            .expect("valid duration");
+        let formatted = fire_at.format("%Y-%m-%d %H:%M:%S").to_string();
+        (None, formatted)
+    } else if let Some(cron_expr) = cron {
+        let schedule = match cron::Schedule::from_str(cron_expr) {
+            Ok(s) => s,
+            Err(e) => {
+                warn!(cron_expr, err = %e, "invalid cron expression");
+                return (false, format!("Invalid cron expression '{cron_expr}': {e}"));
+            }
         };
+        let local = match schedule.upcoming(chrono::Local).next() {
+            Some(t) => t,
+            None => {
+                warn!(cron_expr, "cron expression never repeats");
+                return (
+                    false,
+                    "Cron expression never repeats (no future occurrence).".into(),
+                );
+            }
+        };
+        let formatted = local.format("%Y-%m-%d %H:%M:%S").to_string();
+        (Some(cron_expr.to_owned()), formatted)
+    } else {
+        let formatted = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        (None, formatted)
+    };
 
     let task_id = uuid::Uuid::new_v4().to_string();
     let scheduled = ScheduledTask {
@@ -207,16 +200,27 @@ async fn handle_schedule_task(
                 Some(c) => format!("`{c}`"),
                 None => "one-shot".into(),
             };
-            let safe_task = task.replace('>', "\\>").replace('\n', " ").replace('\r', "");
+            let safe_task = task
+                .replace('>', "\\>")
+                .replace('\n', " ")
+                .replace('\r', "");
             let confirm = format!(
                 "✅ Task scheduled!\n> {}\nCron: {}\nNext run: {}",
                 safe_task, cron_display, next_run_str,
             );
             let confirm_with_mention = maybe_mention(&confirm, chat_type, open_id);
             let _ = client
-                .send_message_to(reply_id, reply_id_type, post_md(&confirm_with_mention), "post")
+                .send_message_to(
+                    reply_id,
+                    reply_id_type,
+                    post_md(&confirm_with_mention),
+                    "post",
+                )
                 .await;
-            (true, format!("Task scheduled successfully. Next run at: {next_run_str}"))
+            (
+                true,
+                format!("Task scheduled successfully. Next run at: {next_run_str}"),
+            )
         }
         Err(e) => {
             warn!(task_id, err = %e, "failed to persist scheduled task");
@@ -239,9 +243,11 @@ async fn handle_list_tasks(
                 for task in &tasks {
                     lines.push_str(&format!(
                         "- `{}`: {} (cron: {}, next: {}) [{}]\n",
-                        task.id, task.task_description,
+                        task.id,
+                        task.task_description,
                         task.cron.as_deref().unwrap_or("one-shot"),
-                        task.next_run_at, task.status,
+                        task.next_run_at,
+                        task.status,
                     ));
                 }
                 (true, lines)
@@ -262,7 +268,10 @@ fn handle_use_pro_model(
     if let Some(pro) = pro_provider {
         *provider = pro.clone();
         info!("switched to Pro model for complex task");
-        (true, "Switched to Pro model. I now have more reasoning capacity to handle this task.".into())
+        (
+            true,
+            "Switched to Pro model. I now have more reasoning capacity to handle this task.".into(),
+        )
     } else {
         (false, "Pro model is not available.".into())
     }
@@ -309,10 +318,14 @@ async fn handle_execute_command(
     let al = ctx.allowlist.read().await;
 
     match tools::execute_command_with_config(
-        &command, &al, true,
+        &command,
+        &al,
+        true,
         ctx.storage.config.execution.command_timeout_seconds,
         ctx.storage.config.execution.max_output_bytes,
-    ).await {
+    )
+    .await
+    {
         Ok(output) => {
             let content = output.to_content();
             (true, content)
@@ -394,10 +407,7 @@ pub struct WebhookResponse {
 }
 
 /// POST /feishu/webhook — Feishu schema 2.0 only.
-pub async fn handler(
-    State(ctx): State<SharedContext>,
-    body: String,
-) -> Json<WebhookResponse> {
+pub async fn handler(State(ctx): State<SharedContext>, body: String) -> Json<WebhookResponse> {
     info!(raw_body = %body, "feishu webhook received");
 
     // 1. Parse the schema 2.0 payload.
@@ -460,14 +470,13 @@ pub async fn handler(
             handle_message_event(&ctx, &payload.event).await;
         }
         "card.action.trigger" => {
-            let action: CardActionPayload = serde_json::from_value(
-                payload.event.get("action").cloned().unwrap_or_default(),
-            )
-            .unwrap_or(CardActionPayload {
-                value: None,
-                tag: None,
-                message_id: None,
-            });
+            let action: CardActionPayload =
+                serde_json::from_value(payload.event.get("action").cloned().unwrap_or_default())
+                    .unwrap_or(CardActionPayload {
+                        value: None,
+                        tag: None,
+                        message_id: None,
+                    });
             handle_card_action(&ctx, &action).await;
         }
         other => {
@@ -482,7 +491,6 @@ pub async fn handler(
     })
 }
 
-
 /// Handle `im.message.receive_v1` — user sent a message to the bot.
 async fn handle_message_event(ctx: &SharedContext, event: &serde_json::Value) {
     let message = match event["message"].as_object() {
@@ -496,7 +504,10 @@ async fn handle_message_event(ctx: &SharedContext, event: &serde_json::Value) {
     let chat_id = message["chat_id"].as_str().unwrap_or("").to_owned();
     let message_id = message["message_id"].as_str().unwrap_or("").to_owned();
     let msg_type = message["message_type"].as_str().unwrap_or("");
-    let chat_type = event["message"]["chat_type"].as_str().unwrap_or("p2p").to_owned();
+    let chat_type = event["message"]["chat_type"]
+        .as_str()
+        .unwrap_or("p2p")
+        .to_owned();
     let open_id = event["sender"]["sender_id"]["open_id"]
         .as_str()
         .unwrap_or("")
@@ -542,13 +553,18 @@ async fn handle_message_event(ctx: &SharedContext, event: &serde_json::Value) {
     // Enqueue to per-chat processing pipeline — serializes messages
     // so concurrent writes never corrupt the session VecDeque.
     let ctx = ctx.clone();
-    chat_queue().enqueue(ctx, ChatEvent {
-        chat_id,
-        chat_type,
-        open_id,
-        message_id,
-        user_text,
-    }).await;
+    chat_queue()
+        .enqueue(
+            ctx,
+            ChatEvent {
+                chat_id,
+                chat_type,
+                open_id,
+                message_id,
+                user_text,
+            },
+        )
+        .await;
 }
 
 /// Process a Feishu chat message: LLM → tool calls → LLM → send response.
@@ -571,7 +587,14 @@ pub(crate) async fn process_feishu_chat(
         Some(p) => p.clone(),
         None => {
             warn!("no flash provider available for feishu chat");
-            send_fallback(ctx, chat_id, chat_type, open_id, "Service unavailable: no model provider").await;
+            send_fallback(
+                ctx,
+                chat_id,
+                chat_type,
+                open_id,
+                "Service unavailable: no model provider",
+            )
+            .await;
             return false;
         }
     };
@@ -597,10 +620,7 @@ pub(crate) async fn process_feishu_chat(
     let user_tokens = provider.count_tokens(clean_text);
     {
         let mut s = session.write().await;
-        s.push_message(
-            ChatMessage::user(clean_text.to_owned()),
-            user_tokens,
-        );
+        s.push_message(ChatMessage::user(clean_text.to_owned()), user_tokens);
     }
 
     // 4. Build initial messages: system prompt + memory + conversation history.
@@ -609,7 +629,11 @@ pub(crate) async fn process_feishu_chat(
     //    Use the original `user_text` (with prefix if present) so the LLM
     //    receives the full context even though the session stores the clean version.
     let system_msg = arcc_core::model::prompts::templates::server().to_chat_message();
-    let memory_user_id = if chat_type == "group" { open_id } else { chat_id };
+    let memory_user_id = if chat_type == "group" {
+        open_id
+    } else {
+        chat_id
+    };
     let memory_context = ctx.memory.format_for_context(memory_user_id);
 
     let mut messages = Vec::new();
@@ -681,8 +705,16 @@ pub(crate) async fn process_feishu_chat(
         let req = ChatRequest {
             model: provider.model_name().to_owned(),
             messages: messages.clone(),
-            tools: if has_tools { Some(tool_defs.clone()) } else { None },
-            tool_choice: if has_tools { Some(serde_json::json!("auto")) } else { None },
+            tools: if has_tools {
+                Some(tool_defs.clone())
+            } else {
+                None
+            },
+            tool_choice: if has_tools {
+                Some(serde_json::json!("auto"))
+            } else {
+                None
+            },
             temperature: Some(temperature),
             max_tokens: Some(max_tokens),
             stream: false,
@@ -694,7 +726,14 @@ pub(crate) async fn process_feishu_chat(
             Ok(r) => r,
             Err(e) => {
                 error!(err = %e, "LLM call failed for feishu message");
-                send_fallback(ctx, chat_id, chat_type, open_id, "Sorry, I encountered an error processing your message.").await;
+                send_fallback(
+                    ctx,
+                    chat_id,
+                    chat_type,
+                    open_id,
+                    "Sorry, I encountered an error processing your message.",
+                )
+                .await;
                 return false;
             }
         };
@@ -715,7 +754,11 @@ pub(crate) async fn process_feishu_chat(
         // (the loop breaks below).  Persisting them to the session corrupts the
         // history — the next turn will get "tool_calls must be followed by tool
         // messages" from the API.  Strip them when in Phase 2.
-        let tool_calls_for_session = if has_tools { msg.tool_calls.clone() } else { None };
+        let tool_calls_for_session = if has_tools {
+            msg.tool_calls.clone()
+        } else {
+            None
+        };
         let asst_tokens = provider.count_tokens(display_content);
         {
             let mut s = session.write().await;
@@ -757,9 +800,23 @@ pub(crate) async fn process_feishu_chat(
             info!(tool = %tc.name, id = %tc.id, "executing feishu tool call");
 
             let (tool_ok, tool_content) = match tc.name.as_str() {
-                "reply_to_user" => handle_reply_to_user(tc, client, chat_type, open_id, &reply_id, reply_id_type).await,
+                "reply_to_user" => {
+                    handle_reply_to_user(tc, client, chat_type, open_id, &reply_id, reply_id_type)
+                        .await
+                }
                 "get_current_time" => handle_get_current_time(),
-                "schedule_task" => handle_schedule_task(ctx, tc, chat_id, chat_type, open_id, &reply_id, reply_id_type).await,
+                "schedule_task" => {
+                    handle_schedule_task(
+                        ctx,
+                        tc,
+                        chat_id,
+                        chat_type,
+                        open_id,
+                        &reply_id,
+                        reply_id_type,
+                    )
+                    .await
+                }
                 "list_scheduled_tasks" => handle_list_tasks(ctx, tc, chat_id).await,
                 "use_pro_model" => handle_use_pro_model(tc, pro_provider.as_ref(), &mut provider),
                 "cancel_scheduled_task" => handle_cancel_task(ctx, tc).await,
@@ -789,7 +846,10 @@ pub(crate) async fn process_feishu_chat(
         // the maximum allowed.
         tool_rounds += 1;
         if tool_rounds >= MAX_TOOL_ROUNDS {
-            warn!(tool_rounds, "feishu tool calling exceeded max rounds, forcing phase 2");
+            warn!(
+                tool_rounds,
+                "feishu tool calling exceeded max rounds, forcing phase 2"
+            );
             phase = 2;
         }
     };
@@ -800,7 +860,12 @@ pub(crate) async fn process_feishu_chat(
     if !replied_to_user {
         let reply_with_mention = maybe_mention(&reply_text, chat_type, open_id);
         if let Err(e) = client
-            .send_message_to(&reply_id, reply_id_type, post_md(&reply_with_mention), "post")
+            .send_message_to(
+                &reply_id,
+                reply_id_type,
+                post_md(&reply_with_mention),
+                "post",
+            )
             .await
         {
             warn!(err = %e, "failed to send feishu result");
@@ -827,7 +892,13 @@ pub(crate) async fn process_feishu_chat(
 }
 
 /// Send a fallback text message when normal processing fails.
-async fn send_fallback(ctx: &SharedContext, chat_id: &str, chat_type: &str, open_id: &str, text: &str) {
+async fn send_fallback(
+    ctx: &SharedContext,
+    chat_id: &str,
+    chat_type: &str,
+    open_id: &str,
+    text: &str,
+) {
     let client = match ctx.feishu_client.as_ref() {
         Some(c) => c,
         None => return,
@@ -839,7 +910,12 @@ async fn send_fallback(ctx: &SharedContext, chat_id: &str, chat_type: &str, open
     };
     let text_with_mention = maybe_mention(text, chat_type, open_id);
     let _ = client
-        .send_message_to(&reply_id, reply_id_type, post_md(&text_with_mention), "post")
+        .send_message_to(
+            &reply_id,
+            reply_id_type,
+            post_md(&text_with_mention),
+            "post",
+        )
         .await;
 }
 

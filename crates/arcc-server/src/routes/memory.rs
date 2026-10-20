@@ -4,9 +4,9 @@
 //! store that the auto-extraction system populates after each `/chat` request.
 
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 use tracing::error;
@@ -18,15 +18,26 @@ use arcc_storage::db::models::MemoryFact;
 
 fn mem_err(e: impl std::fmt::Display) -> (StatusCode, Json<MemoryError>) {
     error!(err = %e, "memory operation failed");
-    (StatusCode::INTERNAL_SERVER_ERROR, Json(MemoryError { error: e.to_string() }))
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(MemoryError {
+            error: e.to_string(),
+        }),
+    )
 }
 
 fn not_found(msg: &str) -> (StatusCode, Json<MemoryError>) {
-    (StatusCode::NOT_FOUND, Json(MemoryError { error: msg.into() }))
+    (
+        StatusCode::NOT_FOUND,
+        Json(MemoryError { error: msg.into() }),
+    )
 }
 
 fn bad_request(msg: &str) -> (StatusCode, Json<MemoryError>) {
-    (StatusCode::BAD_REQUEST, Json(MemoryError { error: msg.into() }))
+    (
+        StatusCode::BAD_REQUEST,
+        Json(MemoryError { error: msg.into() }),
+    )
 }
 
 // ── Request / Response types ─────────────────────────────────────
@@ -70,13 +81,16 @@ pub async fn create_memory(
         return Err(bad_request("key and value must not be empty"));
     }
 
-    ctx.memory.set(&user_id, &key, &value, "manual").map_err(mem_err)?;
+    ctx.memory
+        .set(&user_id, &key, &value, "manual")
+        .map_err(mem_err)?;
 
     // Read back the inserted fact.
     let facts = ctx.memory.list(&user_id).map_err(mem_err)?;
-    let fact = facts.into_iter().find(|f| f.key == key).ok_or_else(|| {
-        mem_err("fact not found after insert")
-    })?;
+    let fact = facts
+        .into_iter()
+        .find(|f| f.key == key)
+        .ok_or_else(|| mem_err("fact not found after insert"))?;
 
     Ok((StatusCode::CREATED, Json(fact)))
 }
@@ -93,13 +107,16 @@ pub async fn update_memory(
         return Err(bad_request("value must not be empty"));
     }
 
-    ctx.memory.set(&user_id, &key, &value, "manual").map_err(mem_err)?;
+    ctx.memory
+        .set(&user_id, &key, &value, "manual")
+        .map_err(mem_err)?;
 
     // Read back the updated fact.
     let facts = ctx.memory.list(&user_id).map_err(mem_err)?;
-    let fact = facts.into_iter().find(|f| f.key == key).ok_or_else(|| {
-        not_found("fact not found")
-    })?;
+    let fact = facts
+        .into_iter()
+        .find(|f| f.key == key)
+        .ok_or_else(|| not_found("fact not found"))?;
 
     Ok(Json(fact))
 }

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 use arcc_core::context::AppContext;
 use arcc_core::model::deepseek::DeepSeekProvider;
@@ -56,19 +56,23 @@ fn init_tracing(mode: &str) -> Option<WorkerGuard> {
     } else {
         "info,arcc=debug"
     };
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(default_filter));
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter));
 
     match mode {
         "tui" => {
             let log_dir = arcc_home_log_dir();
             std::fs::create_dir_all(&log_dir).ok();
-            let log_path = std::env::var("ARCC_LOG")
-                .unwrap_or_else(|_| format!("{}/tui.log", log_dir));
+            let log_path =
+                std::env::var("ARCC_LOG").unwrap_or_else(|_| format!("{}/tui.log", log_dir));
             let file = std::fs::File::create(&log_path).expect("create log file");
             tracing_subscriber::registry()
                 .with(filter)
-                .with(tracing_subscriber::fmt::layer().with_writer(file).with_ansi(false))
+                .with(
+                    tracing_subscriber::fmt::layer()
+                        .with_writer(file)
+                        .with_ansi(false),
+                )
                 .init();
             eprintln!("[arcc] logs → {log_path}");
             None
@@ -92,8 +96,10 @@ fn init_tracing(mode: &str) -> Option<WorkerGuard> {
                         .with_ansi(false),
                 )
                 .init();
-            eprintln!("[arcc] logs → {log_dir}/server.{}.log (daily rotation)",
-                chrono::Local::now().format("%Y-%m-%d"));
+            eprintln!(
+                "[arcc] logs → {log_dir}/server.{}.log (daily rotation)",
+                chrono::Local::now().format("%Y-%m-%d")
+            );
             Some(guard)
         }
         _ => {
@@ -155,10 +161,7 @@ async fn main() -> anyhow::Result<()> {
             )
         } else {
             let strict = storage.config.model.use_strict_mode;
-            tracing::info!(
-                strict_mode = strict,
-                "using DeepSeek provider"
-            );
+            tracing::info!(strict_mode = strict, "using DeepSeek provider");
             (
                 Arc::new(DeepSeekProvider::with_strict_mode(
                     &storage.config.model.api_base,
@@ -190,7 +193,11 @@ async fn main() -> anyhow::Result<()> {
     registry.register(&storage.config.model.flash_model, flash);
 
     // ---- build shared context ----
-    let ctx = Arc::new(AppContext::new(registry, storage, cli.dangerously_skip_permissions));
+    let ctx = Arc::new(AppContext::new(
+        registry,
+        storage,
+        cli.dangerously_skip_permissions,
+    ));
 
     // ---- dispatch ----
     if cli.acp {

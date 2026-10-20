@@ -4,8 +4,8 @@
 //! - **Streaming** (default): LLM tokens printed as they arrive (`print!` / `eprint!`).
 //! - **JSON** (`--json`): collects full result, outputs a single JSON object at the end.
 
-use std::io::{Read, Write};
 use serde::Serialize;
+use std::io::{Read, Write};
 use tracing::info;
 
 use arcc_core::context::SharedContext;
@@ -38,11 +38,7 @@ pub struct CliResult {
 ///
 /// When `json_mode` is `true`, all output is buffered and emitted as a single
 /// JSON object on stdout — no streaming fragments, no stderr tool-echo.
-pub async fn run(
-    ctx: SharedContext,
-    prompt: &str,
-    json_mode: bool,
-) -> anyhow::Result<()> {
+pub async fn run(ctx: SharedContext, prompt: &str, json_mode: bool) -> anyhow::Result<()> {
     let prompt = prompt.trim();
 
     if let Some(cmd) = prompt.strip_prefix('!') {
@@ -92,10 +88,7 @@ pub async fn run(
         msg
     };
 
-    let mut messages = vec![
-        system_msg,
-        ChatMessage::user(prompt.to_owned()),
-    ];
+    let mut messages = vec![system_msg, ChatMessage::user(prompt.to_owned())];
 
     info!(model = %provider.model_name(), "CLI tool-calling stream");
 
@@ -211,10 +204,7 @@ pub async fn run(
 
         // Execute tool calls and build follow-up messages.
         for tc in &tool_calls {
-            let command = tc.arguments["command"]
-                .as_str()
-                .unwrap_or("")
-                .to_owned();
+            let command = tc.arguments["command"].as_str().unwrap_or("").to_owned();
 
             if !json_mode {
                 eprintln!("\n⚡ {command}");
@@ -230,7 +220,11 @@ pub async fn run(
                 images: Vec::new(),
                 tool_calls: Some(vec![tc.clone()]),
                 tool_call_id: None,
-                reasoning_content: if reasoning_buf.is_empty() { None } else { Some(reasoning_buf.clone()) },
+                reasoning_content: if reasoning_buf.is_empty() {
+                    None
+                } else {
+                    Some(reasoning_buf.clone())
+                },
             });
 
             match executed {
@@ -252,7 +246,8 @@ pub async fn run(
                 }
                 Err(e) => {
                     let err_str = e.to_string();
-                    let status = if err_str.contains("confirmation") || err_str.contains("blocked") {
+                    let status = if err_str.contains("confirmation") || err_str.contains("blocked")
+                    {
                         "blocked"
                     } else {
                         "error"
@@ -272,7 +267,10 @@ pub async fn run(
                     } else {
                         eprintln!("error: {e}");
                     }
-                    messages.push(ChatMessage::tool_result(tc.id.clone(), format!("error: {e}")));
+                    messages.push(ChatMessage::tool_result(
+                        tc.id.clone(),
+                        format!("error: {e}"),
+                    ));
                 }
             }
         }

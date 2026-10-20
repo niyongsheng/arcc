@@ -5,11 +5,11 @@
 //! An empty / unset key disables authentication (backwards compatible).
 
 use axum::{
+    Json,
     extract::{Request, State},
     http::StatusCode,
     middleware::Next,
     response::Response,
-    Json,
 };
 use serde_json::json;
 use tracing::warn;

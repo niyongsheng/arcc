@@ -1,8 +1,8 @@
 use axum::{
+    Json,
     extract::State,
     http::StatusCode,
     response::sse::{Event, Sse},
-    Json,
 };
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -62,7 +62,10 @@ pub async fn handler(
     }
 
     // Load conversation history so the LLM has multi-turn context.
-    let session = ctx.sessions.get_or_create(&input.session_id, "server").await;
+    let session = ctx
+        .sessions
+        .get_or_create(&input.session_id, "server")
+        .await;
     {
         let s = session.read().await;
         let history = s.context();
@@ -103,10 +106,7 @@ pub async fn handler(
             // Save user message.
             {
                 let mut s = session.write().await;
-                s.push_message(
-                    ChatMessage::user(input.prompt.clone()),
-                    user_msg_tokens,
-                );
+                s.push_message(ChatMessage::user(input.prompt.clone()), user_msg_tokens);
             }
 
             // Stream response to SSE.
@@ -183,9 +183,7 @@ pub async fn handler(
                         Err(e) => {
                             error!(err = %e, "stream error");
                             let _ = tx
-                                .send(Ok(Event::default()
-                                    .event("error")
-                                    .data(e.to_string())))
+                                .send(Ok(Event::default().event("error").data(e.to_string())))
                                 .await;
                             break;
                         }

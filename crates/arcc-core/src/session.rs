@@ -582,9 +582,6 @@ mod tests {
         );
 
         let msgs = session.prepare_for_request();
-        assert_eq!(
-            msgs[0].reasoning_content.as_deref(),
-            Some("real reasoning")
-        );
+        assert_eq!(msgs[0].reasoning_content.as_deref(), Some("real reasoning"));
     }
 }

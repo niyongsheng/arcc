@@ -12,19 +12,13 @@ pub struct ConfigWatcher {
 impl ConfigWatcher {
     /// Start watching `path`. Every time the file is written, the latest
     /// contents are sent through `tx`.
-    pub fn spawn(
-        path: PathBuf,
-        tx: watch::Sender<Option<String>>,
-    ) -> Result<Self, notify::Error> {
+    pub fn spawn(path: PathBuf, tx: watch::Sender<Option<String>>) -> Result<Self, notify::Error> {
         let path_clone = path.clone();
 
         let mut watcher = RecommendedWatcher::new(
             move |res: Result<Event, notify::Error>| match res {
                 Ok(event) => {
-                    if !matches!(
-                        event.kind,
-                        EventKind::Modify(_) | EventKind::Create(_)
-                    ) {
+                    if !matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_)) {
                         return;
                     }
                     if !event.paths.iter().any(|p| p == &path_clone) {

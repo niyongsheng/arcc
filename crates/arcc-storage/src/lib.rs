@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex};
 use tracing::info;
 
 use crate::audit::types::AuditEvent;
-use crate::db::queries;
 use crate::db::models::{InputHistoryEntry, MemoryFact, Message, ScheduledTask, Session, Summary};
+use crate::db::queries;
 
 /// Top-level initialisation: loads config, opens DB, runs migrations.
 ///
@@ -28,7 +28,10 @@ impl ArccStorage {
     /// Replaces the `lock().expect("db mutex poisoned")` boilerplate that
     /// was copy-pasted across 20 query methods — now the poisoned case
     /// is a proper error instead of a panic.
-    fn with_db<T>(&self, f: impl FnOnce(&rusqlite::Connection) -> Result<T, StorageError>) -> Result<T, StorageError> {
+    fn with_db<T>(
+        &self,
+        f: impl FnOnce(&rusqlite::Connection) -> Result<T, StorageError>,
+    ) -> Result<T, StorageError> {
         let conn = self.db.lock().map_err(|_| StorageError::Poisoned)?;
         f(&conn)
     }
@@ -46,9 +49,7 @@ impl ArccStorage {
         };
 
         let db_path = home.join(&config.storage.db_path);
-        let db = Arc::new(Mutex::new(
-            db::init(&db_path).map_err(StorageError::Db)?,
-        ));
+        let db = Arc::new(Mutex::new(db::init(&db_path).map_err(StorageError::Db)?));
 
         let audit_path = home.join(&config.logging.log_dir).join("audit.jsonl");
         let audit = audit::writer::AuditWriter::open(&audit_path).map_err(StorageError::Io)?;
@@ -104,7 +105,15 @@ impl ArccStorage {
         input_tokens: i64,
         output_tokens: i64,
     ) -> Result<(), StorageError> {
-        self.with_db(|conn| Ok(queries::upsert_token_usage(conn, session_id, model, input_tokens, output_tokens)?))
+        self.with_db(|conn| {
+            Ok(queries::upsert_token_usage(
+                conn,
+                session_id,
+                model,
+                input_tokens,
+                output_tokens,
+            )?)
+        })
     }
 
     /// Latest summary for a session.
@@ -127,16 +136,15 @@ impl ArccStorage {
     }
 
     /// Record a user prompt in the input history.
-    pub fn record_input_history(
-        &self,
-        session_id: &str,
-        prompt: &str,
-    ) -> Result<(), StorageError> {
+    pub fn record_input_history(&self, session_id: &str, prompt: &str) -> Result<(), StorageError> {
         self.with_db(|conn| Ok(queries::insert_input_history(conn, session_id, prompt)?))
     }
 
     /// List the most recent N input history entries.
-    pub fn recent_input_history(&self, limit: usize) -> Result<Vec<InputHistoryEntry>, StorageError> {
+    pub fn recent_input_history(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<InputHistoryEntry>, StorageError> {
         self.with_db(|conn| Ok(queries::list_input_history(conn, limit)?))
     }
 
@@ -232,9 +240,7 @@ fn home_dir() -> PathBuf {
 
 fn dirs_fallback() -> PathBuf {
     // macOS / Linux: $HOME, Windows: %USERPROFILE%
-    if let Ok(home) = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-    {
+    if let Ok(home) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
         return PathBuf::from(home);
     }
     PathBuf::from(".")
