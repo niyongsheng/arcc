@@ -10,10 +10,9 @@ use super::loop_event::AppEvent;
 /// Returns a `JoinHandle` that can be aborted to stop the handler (e.g. before
 /// running an interactive child process that needs exclusive stdin access).
 ///
-/// Mouse capture is NOT enabled — text selection in the terminal works normally.
-/// Most terminals convert mouse scroll-wheel events into ↑/↓ or PgUp/PgDn key
-/// events, which the App handles contextually (scroll chat when input is empty,
-/// navigate history when input has content).
+/// Mouse capture is enabled by the main loop at startup (`/mouse off` releases
+/// it so the terminal's native drag-to-select works again).  While capture is
+/// on, the handler only consumes wheel events; clicks and drags are ignored.
 pub fn spawn_input_handler(tx: mpsc::UnboundedSender<AppEvent>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         loop {

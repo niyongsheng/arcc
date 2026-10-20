@@ -56,7 +56,7 @@ pub static COMMANDS: &[Cmd] = &[
     },
     Cmd {
         name: "init",
-        desc: "Generate ARCC.md with project instructions in repo root",
+        desc: "Generate AGENTS.md with project instructions in repo root",
         usage: "/init",
         cat: Category::System,
     },
@@ -73,6 +73,12 @@ pub static COMMANDS: &[Cmd] = &[
         cat: Category::Tools,
     },
     Cmd {
+        name: "computer",
+        desc: "Toggle desktop control (screenshot + mouse/keyboard, macOS)",
+        usage: "/computer [on/off/status]",
+        cat: Category::Tools,
+    },
+    Cmd {
         name: "stats",
         desc: "Show session statistics",
         usage: "/stats",
@@ -82,6 +88,12 @@ pub static COMMANDS: &[Cmd] = &[
         name: "thinking",
         desc: "Toggle DeepSeek thinking mode on/off",
         usage: "/thinking",
+        cat: Category::System,
+    },
+    Cmd {
+        name: "mouse",
+        desc: "Toggle terminal mouse capture (off restores native text selection)",
+        usage: "/mouse [on/off/status]",
         cat: Category::System,
     },
     Cmd {
@@ -117,6 +129,15 @@ pub fn help_line(cmd: &Cmd) -> String {
     format!("**{}**  — {}  _({})_", cmd.usage, cmd.desc, cmd.cat.label())
 }
 
+/// Escape a value for a markdown table cell.
+///
+/// `ratatui-markdown` splits a table row on every ASCII `|` and does not
+/// understand `\|` escapes, so a literal pipe would shift the remaining
+/// values into extra columns.  Use a lookalike instead.
+fn table_cell(text: &str) -> String {
+    text.replace('|', "∣")
+}
+
 /// Format the full help listing as a markdown table.
 pub fn help_all() -> Vec<String> {
     let mut table = String::new();
@@ -126,11 +147,11 @@ pub fn help_all() -> Vec<String> {
     table.push_str("|---|---|---|\n");
 
     for cmd in COMMANDS {
-        let escaped_usage = cmd.usage.replace('|', "\\|");
-        let escaped_desc = cmd.desc.replace('|', "\\|");
         table.push_str(&format!(
             "| `{}` | {} | {} |\n",
-            escaped_usage, escaped_desc, cmd.cat.label()
+            table_cell(cmd.usage),
+            table_cell(cmd.desc),
+            cmd.cat.label()
         ));
     }
 
@@ -173,5 +194,26 @@ mod tests {
     fn test_find() {
         assert!(find("help").is_some());
         assert!(find("nope").is_none());
+    }
+
+    #[test]
+    fn help_table_has_three_columns() {
+        let text = help_all().join("\n");
+        // The header line is prefixed with the "🤖 " speaker marker, so match
+        // on any line containing a pipe rather than on a leading `|`.
+        let rows: Vec<&str> = text.lines().filter(|line| line.contains('|')).collect();
+
+        // Header + separator + one row per command.
+        assert_eq!(rows.len(), 2 + COMMANDS.len());
+
+        // `ratatui-markdown` splits on every ASCII `|`; each row must contain
+        // exactly the four delimiters of a three-column table.
+        for row in rows {
+            assert_eq!(
+                row.chars().filter(|c| *c == '|').count(),
+                4,
+                "row has the wrong column count: {row}"
+            );
+        }
     }
 }

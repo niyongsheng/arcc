@@ -43,6 +43,8 @@ pub enum AppEvent {
     Quit,
     /// Generic user prompt — caller awaits a response via the oneshot.
     Prompt(PromptRequest),
+    /// The pending prompt was rejected or timed out; clear the prompt UI.
+    PromptExpired,
     /// Interactive command — TUI should temporarily exit, let the user interact
     /// with the command in the real terminal, then re-enter TUI.
     /// The response_tx sends back the exit code as a string.
@@ -61,11 +63,18 @@ pub enum AppEvent {
     Status(String),
     /// Dismiss current overlay (dashboard, etc.)
     Dismiss,
+    /// Enable or disable terminal mouse capture.
+    ///
+    /// Capture is needed for in-app wheel scrolling, but it prevents the
+    /// terminal's native drag-to-select.  `/mouse off` releases it.
+    SetMouseCapture(bool),
 }
 
 /// Create the MPSC channel and spawn a tick generator.
-pub fn create_event_loop() -> (mpsc::UnboundedSender<AppEvent>, mpsc::UnboundedReceiver<AppEvent>)
-{
+pub fn create_event_loop() -> (
+    mpsc::UnboundedSender<AppEvent>,
+    mpsc::UnboundedReceiver<AppEvent>,
+) {
     let (tx, rx) = mpsc::unbounded_channel();
     let tick_tx = tx.clone();
 
