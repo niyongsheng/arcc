@@ -2,6 +2,11 @@
 name = "arcc-server"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Axum HTTP server, Feishu webhook, and SSE endpoints for ARCC"
+keywords = ["axum", "server", "feishu", "sse", "ai"]
+categories = ["web-programming::http-server", "development-tools"]
 
 [dependencies]
 tokio.workspace = true

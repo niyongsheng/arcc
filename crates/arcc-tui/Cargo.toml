@@ -2,6 +2,11 @@
 name = "arcc-tui"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Ratatui terminal UI for ARCC: chat, tools, dashboard, and computer-use approvals"
+keywords = ["tui", "ratatui", "terminal", "ai", "chat"]
+categories = ["command-line-interface"]
 
 [dependencies]
 tokio.workspace = true

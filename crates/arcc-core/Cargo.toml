@@ -2,6 +2,11 @@
 name = "arcc-core"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Core abstractions for ARCC: model providers, tools, sessions, safety, and computer use"
+keywords = ["ai", "agent", "deepseek", "llm", "mcp"]
+categories = ["api-bindings", "development-tools"]
 
 [dependencies]
 tokio.workspace = true

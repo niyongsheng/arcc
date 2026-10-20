@@ -2,6 +2,11 @@
 name = "arcc-cli"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Headless CLI and PTY execution frontend for ARCC"
+keywords = ["cli", "ai", "pty", "agent"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 tokio.workspace = true

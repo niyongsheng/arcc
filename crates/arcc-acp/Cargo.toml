@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "ACP (Agent Client Protocol v1) stdio server for ARCC — enables AionUI and other ACP clients to chat, stream, and run tools"
+keywords = ["acp", "agent", "protocol", "ai", "stdio"]
+categories = ["development-tools"]
 
 [dependencies]
 arcc-core.workspace = true

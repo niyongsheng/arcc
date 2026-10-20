@@ -2,6 +2,11 @@
 name = "arcc-storage"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Embedded SQLite, TOML config, and JSON Lines audit storage for ARCC"
+keywords = ["sqlite", "storage", "audit", "config", "rusqlite"]
+categories = ["database", "config"]
 
 [dependencies]
 tokio.workspace = true
