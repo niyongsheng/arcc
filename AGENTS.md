@@ -48,7 +48,7 @@ api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 - **Model selection**: DeepSeek-V4 Pro (complex reasoning) and Flash (high-frequency dialogue) chosen via config; token counting uses `tiktoken-rs`.
 - **TUI framework**: `ratatui` + `crossterm` for wide platform support and minimal dependencies over immediate-mode alternatives.
 - **MCP integration**: Tool executor implements a lightweight Model Context Protocol; external plugins can be loaded as subprocesses.
-- **ARCC.md generation (`/init` command)**: calls the AI to analyze the current project and writes `ARCC.md`; streaming output shown in chat. Implementation is spread across `arcc-tui` (Prompt component) and `arcc-core` (session interaction).
+- **AGENTS.md generation (`/init` command)**: calls the AI to analyze the current project and writes `AGENTS.md`; streaming output shown in chat. Implementation is spread across `arcc-tui` (Prompt component) and `arcc-core` (session interaction).
 - **Config location**: `~/.arcc/config.toml`; environment variable `ARCC_API_KEY` overrides the config file’s `api_key`.
 - **FEATURE FLAGS**: `portable-pty` is used for shell tool execution, may require `libutil` or `libc` depending on OS; compiled unconditionally.
 
@@ -63,7 +63,7 @@ api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 ## Notice
 Key interfaces and flags an AI will likely interact with:
 
-- **TUI `/init`** – Generates an `ARCC.md` for the current working directory. The assistant will receive this command and must produce a Markdown document following the structure shown in ARCC.md template (Project Overview, Quick Start, etc.). The AI’s response is streamed into the chat.
+- **TUI `/init`** – Generates an `AGENTS.md` for the current working directory. The assistant will receive this command and must produce a Markdown document following the structure shown in AGENTS.md template (Project Overview, Quick Start, etc.). The AI’s response is streamed into the chat.
 - **CLI** – `arcc cli "<prompt>"`; non-interactive, prints response to stdout. Use for scripting.
 - **Server** – `arcc server --daemon` starts HTTP API (Axum) on `127.0.0.1:3030` by default; `POST /v1/chat` with JSON payload. Feishu SSE callback endpoint available at `/feishu/event`.
 - **Config** – TOML file; model parameters, safety rules, tool allowlists. Reloaded on SIGHUP or when `notify` detects changes.

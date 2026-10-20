@@ -2,9 +2,9 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::feishu_client::FeishuClient;
+use crate::mcp::scheduler::McpScheduler;
 use crate::memory::MemoryManager;
 use crate::model::registry::ProviderRegistry;
-use crate::mcp::scheduler::McpScheduler;
 use crate::safety::allowlist::Allowlist;
 use crate::session::SessionManager;
 
@@ -19,7 +19,8 @@ pub struct AppContext {
     pub dangerously_skip_permissions: bool,
     /// Runtime command allowlist, modifiable via interactive prompts.
     pub allowlist: RwLock<Allowlist>,
-    /// Project-level instructions loaded from ARCC.md in repo root.
+    /// Project-level instructions loaded from the nearest `AGENTS.md`
+    /// (or `AGENT.md` / legacy `ARCC.md`) in the repo tree.
     pub project_instructions: RwLock<Option<String>>,
 }
 
@@ -30,9 +31,7 @@ impl AppContext {
         dangerously_skip_permissions: bool,
     ) -> Self {
         let context_max = storage.config.model.context_max_tokens;
-        let allowlist = Allowlist::new(
-            storage.config.safety.require_human_confirm.clone(),
-        );
+        let allowlist = Allowlist::new(storage.config.safety.require_human_confirm.clone());
         // Share the DB connection so Session / SessionManager persist to SQLite.
         let db = storage.db.clone();
         let flash = providers

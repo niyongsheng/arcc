@@ -205,6 +205,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Some(Command::Cli { prompt, json }) => {
             let input = prompt.join(" ");
+            load_project_instructions(&ctx).await;
             tracing::info!(%input, json, "starting CLI mode");
             arcc_cli::run(ctx, &input, json).await?;
         }
@@ -222,19 +223,35 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Auto-detect ARCC.md from project root (walking up to .git boundary).
+/// Project instruction filenames in priority order.
+///
+/// `AGENTS.md` is the cross-agent convention (agents.md). `AGENT.md` is a
+/// common singular variant, and `ARCC.md` is the legacy name kept for
+/// backward compatibility.
+const PROJECT_INSTRUCTION_FILES: &[&str] = &["AGENTS.md", "AGENT.md", "ARCC.md"];
+
+/// Auto-detect project instructions from the nearest ancestor that contains
+/// one, walking up to the `.git` boundary.
 async fn load_project_instructions(ctx: &AppContext) {
     if let Ok(cwd) = std::env::current_dir() {
         let mut dir = cwd;
         loop {
-            let arcc_md = dir.join("ARCC.md");
-            if arcc_md.exists() {
-                if let Ok(content) = std::fs::read_to_string(&arcc_md) {
-                    let mut instr = ctx.project_instructions.write().await;
-                    *instr = Some(content);
-                    tracing::info!(path = %arcc_md.display(), "loaded ARCC.md");
+            for name in PROJECT_INSTRUCTION_FILES {
+                let path = dir.join(name);
+                if !path.is_file() {
+                    continue;
                 }
-                break;
+                match std::fs::read_to_string(&path) {
+                    Ok(content) => {
+                        let mut instr = ctx.project_instructions.write().await;
+                        *instr = Some(content);
+                        tracing::info!(path = %path.display(), "loaded project instructions");
+                        return;
+                    }
+                    Err(e) => {
+                        tracing::warn!(path = %path.display(), err = %e, "failed to read project instructions");
+                    }
+                }
             }
             if dir.join(".git").exists() || !dir.pop() {
                 break;

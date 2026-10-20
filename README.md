@@ -3,7 +3,7 @@
 # ARCC
 
 **[ARCC](https://juejin.cn/post/7650384140925812751) (A Rust Copilot CLI)** — a local-first terminal AI agent written in Rust. Runs as TUI, CLI, Server, or ACP stdio, speaks MCP & ACP, and connects to DeepSeek / Claude / OpenAI.  
-Rust 实现的终端 AI Agent，支持 CLI、TUI、Server、ACP 四种运行模式，兼容 MCP、ACP 协议。
+Rust 实现的高性能终端 AI Agent，支持 CLI、TUI、Server、ACP 四种运行模式，兼容 MCP、ACP 协议。
 
 [![Rust](https://img.shields.io/badge/Rust-2024-%23DEA584?logo=rust)](https://www.rust-lang.org)
 [![DeepSeek](https://img.shields.io/badge/DeepSeek-V4-%234A90D9)](https://deepseek.com)
@@ -12,23 +12,24 @@ Rust 实现的终端 AI Agent，支持 CLI、TUI、Server、ACP 四种运行模�
 [![CI](https://github.com/niyongsheng/arcc/actions/workflows/ci.yml/badge.svg)](https://github.com/niyongsheng/arcc/actions/workflows/ci.yml)
 [![CD](https://img.shields.io/github/v/release/niyongsheng/arcc?display_name=tag&logo=github)](https://github.com/niyongsheng/arcc/releases)
 
-![arcc tui demo](doc/arcc_tui_demo.gif)
+![arcc tui demo](docs/arcc_tui_demo.gif)
 
 ## Features
 
 - **🤖 Dual-Model Scheduling** — DeepSeek-V4-Pro for complex reasoning, DeepSeek-V4-Flash for routine chat; context auto-compressed at ~800k tokens.
 - **🔌 MCP & ACP** — Native MCP client for plugin tools; ACP v1 stdio server (`arcc --acp`) for GUI agents like AionUI.
 - **🛡️ Safety Engine** — Command allowlist → risk rating → interactive confirmation (y/a/n) for dangerous operations.
+- **🖥️ Computer Use (macOS, TUI)** — Screen capture + mouse/keyboard control via DeepSeek Flash vision. Off by default; enable with `/computer on`; every input action is confirmed (y/a/n) and written to the audit log.
 - **💾 Local-First Persistence** — SQLite for sessions/messages/tokens, JSON Lines for audit logs, TOML for config. No cloud, no telemetry.
 
 ## Running Modes
 
 | Mode | Command | Multi-Turn | Tool Call | Persist | Pipe/Script | IM Bot |
 |------|---------|:----------:|:---------:|:-------:|:-----------:|:------:|
-| [**TUI**](doc/tutorial/tui-tutorial.md) | `arcc tui` | ✅ | ✅ | ✅ | — | — |
-| [**CLI**](doc/tutorial/cli-tutorial.md) | `arcc cli "<prompt>"` | — | ✅ | — | ✅ | — |
-| [**Server**](doc/tutorial/server-tutorial.md) | `arcc server --daemon` | ✅ | ✅ | ✅ | — | ✅ |
-| [**ACP**](doc/tutorial/acp-tutorial.md) | `arcc --acp` | ✅ | ✅ | ✅ | — | — |
+| [**TUI**](docs/tutorial/tui-tutorial.md) | `arcc tui` | ✅ | ✅ | ✅ | — | — |
+| [**CLI**](docs/tutorial/cli-tutorial.md) | `arcc cli "<prompt>"` | — | ✅ | — | ✅ | — |
+| [**Server**](docs/tutorial/server-tutorial.md) | `arcc server --daemon` | ✅ | ✅ | ✅ | — | ✅ |
+| [**ACP**](docs/tutorial/acp-tutorial.md) | `arcc --acp` | ✅ | ✅ | ✅ | — | — |
 
 ## Quick Start
 

@@ -28,6 +28,7 @@ ARCC (A Rust Copilot CLI) — 基于 Rust 2024 的终端常驻通用 AI Agent，
 - **可观测性：** tracing + tracing-appender + metrics-exporter-prometheus
 - **持久化：** rusqlite（bundled feature，零系统依赖）+ TOML 配置 + JSON Lines 审计
 - **Token 计数：** tiktoken-rs
+- **Computer Use（macOS）：** xcap 0.9（截图）+ enigo 0.6（鼠标/键盘）
 - **错误处理：** thiserror（库 crate）+ anyhow（binary 层）
 
 ## 三大运行模式（Cargo Workspace 多 crate）
@@ -56,9 +57,10 @@ arcc/
 │   │   ├── src/
 │   │   │   ├── model/      # ModelProvider trait + DeepSeek + 提示词模板
 │   │   │   │   ├── prompts/ # 编译期嵌入的 .md 系统提示词模板
-│   │   │   │   │   ├── cli.md / tui.md / plan.md / server.md / compress.md
+│   │   │   │   │   ├── cli.md / tui.md / plan.md / server.md / compress.md / computer.md
 │   │   │   │   │   └── mod.rs  # SystemPrompt + templates 模块
 │   │   │   │   └── ...
+│   │   │   ├── computer/   # 桌面控制：xcap 截图 + enigo 输入（macOS）
 │   │   │   ├── safety/     # 命令白名单、参数校验、风险评级
 │   │   │   ├── session/    # 对话管理 + 上下文压缩
 │   │   │   ├── tools.rs    # 命令执行（管道 + 交互模式）
@@ -100,6 +102,10 @@ arcc/
 └── src/
     └── main.rs             # 二进制入口：clap 路由到各 crate
 ```
+
+## 项目指令文件（AGENTS.md）
+
+ARCC 启动时从当前目录向上查找最近的 `AGENTS.md`（兼容单数 `AGENT.md`；旧名 `ARCC.md` 作为 fallback），读入 `AppContext.project_instructions`，再以 `## Project Instructions` 追加到 TUI/CLI 的 system prompt。TUI 的 `/init` 命令会在仓库根目录生成 `AGENTS.md`。
 
 ## 核心架构要点
 
@@ -204,6 +210,30 @@ TUI 中内置的数据查看命令，直接从 SQLite 和审计 JSONL 读取：
 
 - `arcc-storage/src/db/queries.rs` — `list_sessions` / `session_messages` / `token_usage_daily` / `latest_summary` / `total_tokens`
 - `arcc-storage/src/audit/reader.rs` — `read_recent()` 从大文件尾部逆向 seek，避免全量扫描
+
+### 10. Computer Use（macOS / TUI）
+
+`arcc-core/src/computer/` 提供桌面控制：
+
+| 文件 | 职责 |
+|------|------|
+| `mod.rs` | 单一 `computer` 工具定义、参数校验、`ComputerSession` 状态 |
+| `capture.rs` | xcap 截图 → 缩放（默认宽 1280）→ PNG/base64；macOS 显示器几何读取 |
+| `input.rs` | enigo 鼠标/键盘；`parse_key_combo("cmd+shift+4")` |
+| `coord.rs` | 截图像素 → 全局逻辑点（多显示器/Retina） |
+| `macos.rs` / `stub.rs` | macOS 实现 / 其他平台 Unsupported |
+
+关键约束与流程：
+
+- 工具默认关闭；`/computer on` 开启，`/computer off` 立即停止，`a` 表示本会话信任所有输入动作。
+- 截图动作只读、自动通过；鼠标/键盘动作走 `AppEvent::Prompt`（y/a/n + 超时）。
+- DeepSeek 图片只允许出现在 `user` 消息：computer 工具结果是 JSON 文本，截图由 TUI 追加为下一条 user 消息（`ChatMessage.images`）。
+- 有图片时请求自动路由到 `[computer_use].vision_model`（默认 `flash_model`，即 `deepseek-flash`）；Pro 仍负责纯文本推理。
+- `max_rounds` 控制单次 prompt 的截图→动作轮数；每轮请求前 `Session::prune_images(keep_screenshots)`，旧截图不落库。
+- 所有动作写 `AuditEvent::ComputerAction`（输入动作 risk=High，截图 risk=Low）。
+- 需要 macOS **Screen Recording**（截图）和 **Accessibility**（输入）权限；TCC 归属发起进程的终端。
+
+配置位于 `~/.arcc/config.toml` 的 `[computer_use]`；模型层 `ChatMessage.images` 与 `DeepSeekMessage.content` 的 content-parts 序列化是该能力的基础。
 
 ## 模型抽象层（arcc-core/model/）
 
@@ -332,9 +362,11 @@ pub enum CoreError {
 | `/model` | view | 显示当前 Pro/Flash 模型 |
 | `/skills` | tools | 列出已注册 MCP 工具 |
 | `/exec <cmd>` | tools | 直接执行 shell 命令 |
+| `/computer [on/off/status]` | tools | 开启/关闭桌面控制（截图 + 鼠标键盘，macOS），每个输入动作需 y/a/n 确认 |
 | `/data <sub> [args]` | system | 查看持久化数据（sessions/messages/token/audit/summary） |
 | `/stats` | system | 会话统计（消息数、历史记录数、会话 ID） |
 | `/thinking` | system | 切换 DeepSeek 思维链模式 |
+| `/mouse [on/off/status]` | system | 开关终端鼠标捕获；`off` 恢复原生拖拽选中/复制，滚轮交给终端（用 PgUp/PgDn 滚动聊天） |
 | `/exit` | system | 退出 ARCC |
 | `/help [cmd]` | navigation | 命令帮助 |
 
