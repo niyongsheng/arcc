@@ -12,7 +12,7 @@ api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
 # 双模型调度
 pro_model = "deepseek-v4-pro"       # 复杂推理 + Agent，1M 上下文，支持 tool calling
-flash_model = "deepseek-v4-flash"   # 高频对话 + 工具调用，1M 上下文，经济高效
+flash_model = "deepseek-flash"      # 高频对话 + 工具调用，1M 上下文，经济高效
 
 # strict 模式：强制模型工具调用遵循 JSON Schema
 # 启用后将使用 Beta endpoint (https://api.deepseek.com/beta)

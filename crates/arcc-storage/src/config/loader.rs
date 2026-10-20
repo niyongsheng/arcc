@@ -151,7 +151,7 @@ fn default_pro_model() -> String {
     "deepseek-v4-pro".into()
 }
 fn default_flash_model() -> String {
-    "deepseek-v4-flash".into()
+    "deepseek-flash".into()
 }
 fn default_context_max() -> usize {
     8000

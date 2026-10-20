@@ -21,7 +21,7 @@ arcc server --daemon
 api_base = "https://api.deepseek.com"
 # api_key = "sk-xxx"                  # 直接填写，或设 DEEPSEEK_API_KEY 环境变量
 pro_model = "deepseek-v4-pro"          # 复杂推理
-flash_model = "deepseek-v4-flash"      # 高频对话 + 压缩
+flash_model = "deepseek-flash"         # 高频对话 + 压缩
 
 [server]
 host = "127.0.0.1"
