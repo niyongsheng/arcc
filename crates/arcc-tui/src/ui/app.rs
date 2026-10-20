@@ -2391,11 +2391,20 @@ pub async fn run(ctx: SharedContext) -> anyhow::Result<()> {
                                 app.character_index = 0;
                             }
                         }
-                    } else if app.status == components::status::IDLE {
+                    } else if app.status == components::status::IDLE
+                        && app
+                            .task_handle
+                            .as_ref()
+                            .is_none_or(|handle| handle.is_finished())
+                    {
+                        // Do not start a second turn while a tool-calling loop
+                        // is still running: its tool result would land after
+                        // the new user message and break the API message order.
                         app.submit(tx.clone());
                     }
-                    // Non-IDLE: Enter silently ignored — user can type their
-                    // next message while AI responds, and submit when finished.
+                    // Non-IDLE or still-running: Enter silently ignored — the
+                    // user can type their next message while AI responds, and
+                    // submit once the task has finished.
                 }
                 AppEvent::InteractiveCommand {
                     command,

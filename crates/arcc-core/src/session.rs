@@ -21,6 +21,90 @@ pub struct Session {
     db: Option<Arc<Mutex<rusqlite::Connection>>>,
 }
 
+/// Ensure every assistant message with `tool_calls` is immediately followed
+/// by one tool message per `tool_call_id`.
+///
+/// The TUI persists the assistant tool-call message before executing the
+/// tools.  If a new user prompt is submitted while a tool is still running,
+/// the resulting `user` message lands between the assistant message and its
+/// tool result.  DeepSeek rejects that order with HTTP 400:
+///
+/// ```text
+/// assistant(tool_calls) -> user("y") -> tool(result)   // invalid
+/// ```
+///
+/// This pass moves interleaved messages after the tool results, inserts a
+/// synthetic result for any missing `tool_call_id`, and drops orphan `tool`
+/// messages that have no matching tool call.
+fn sanitize_tool_call_sequence(msgs: Vec<ChatMessage>) -> Vec<ChatMessage> {
+    let mut out = Vec::with_capacity(msgs.len());
+    let mut i = 0;
+
+    while i < msgs.len() {
+        let msg = &msgs[i];
+        let tool_ids: Vec<String> = if msg.role == "assistant" {
+            msg.tool_calls
+                .as_ref()
+                .map(|calls| calls.iter().map(|call| call.id.clone()).collect())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+        // Not an assistant tool-call turn: copy it, dropping orphan tool
+        // messages that no longer have a matching call.
+        if tool_ids.is_empty() {
+            if msg.role != "tool" {
+                out.push(msg.clone());
+            }
+            i += 1;
+            continue;
+        }
+
+        out.push(msg.clone());
+        i += 1;
+
+        let mut results: HashMap<String, ChatMessage> = HashMap::new();
+        let mut deferred: Vec<ChatMessage> = Vec::new();
+
+        // Scan forward for the matching results.  Stop at the next assistant
+        // turn: a missing result must not swallow a later turn.
+        while i < msgs.len() && results.len() < tool_ids.len() {
+            let candidate = &msgs[i];
+            if candidate.role == "assistant" {
+                break;
+            }
+            if candidate.role == "tool" {
+                if let Some(id) = candidate.tool_call_id.as_ref()
+                    && tool_ids.iter().any(|expected| expected == id)
+                {
+                    results.insert(id.clone(), candidate.clone());
+                }
+                // Orphan/duplicate tool messages are dropped.
+                i += 1;
+                continue;
+            }
+            deferred.push(candidate.clone());
+            i += 1;
+        }
+
+        for id in &tool_ids {
+            if let Some(result) = results.remove(id) {
+                out.push(result);
+            } else {
+                out.push(ChatMessage::tool_result(
+                    id.clone(),
+                    "(tool result missing: the turn was interrupted)".into(),
+                ));
+            }
+        }
+        // User messages that arrived mid-turn are replayed after the tools.
+        out.extend(deferred);
+    }
+
+    out
+}
+
 impl Session {
     /// Acquire the database mutex and call `f` with the connection.
     ///
@@ -275,7 +359,10 @@ impl Session {
     ///
     /// This method:
     /// 1. Returns `context()` (messages + optional summary).
-    /// 2. Injects a `"(reasoning omitted)"` placeholder into any assistant
+    /// 2. Repairs the tool-call message order: every assistant `tool_calls`
+    ///    message is followed by its matching `tool` messages, with missing
+    ///    results synthesized and user interjections moved after them.
+    /// 3. Injects a `"(reasoning omitted)"` placeholder into any assistant
     ///    tool-call message whose `reasoning_content` is missing or empty.
     ///    This mirrors CodeWhale's `sanitize_thinking_mode_messages()`.
     ///
@@ -288,7 +375,7 @@ impl Session {
     /// The stored session messages are **not** modified — placeholders exist only
     /// in the returned `Vec` for the wire format.
     pub fn prepare_for_request(&self) -> Vec<ChatMessage> {
-        let mut msgs = self.context();
+        let mut msgs = sanitize_tool_call_sequence(self.context());
         for msg in &mut msgs {
             if msg.role != "assistant" {
                 continue;
@@ -583,5 +670,64 @@ mod tests {
 
         let msgs = session.prepare_for_request();
         assert_eq!(msgs[0].reasoning_content.as_deref(), Some("real reasoning"));
+    }
+
+    fn assistant_call(id: &str) -> ChatMessage {
+        ChatMessage {
+            role: "assistant".into(),
+            content: String::new(),
+            images: Vec::new(),
+            tool_calls: Some(vec![ToolCall {
+                id: id.into(),
+                name: "execute_command".into(),
+                arguments: serde_json::json!({"command": "rm -rf /tmp/x"}),
+            }]),
+            tool_call_id: None,
+            reasoning_content: None,
+        }
+    }
+
+    #[test]
+    fn prepare_for_request_moves_user_message_after_tool_result() {
+        // Reproduces the 2026-10-20 session: the user's "y" was submitted
+        // while the cleanup command was still running, so it landed between
+        // the assistant tool_calls message and its tool result.
+        let mut session = Session::new("test", "tui", "tui", 1000, None);
+        session.push_message(ChatMessage::user("clean up".into()), 1);
+        session.push_message(assistant_call("call_1"), 1);
+        session.push_message(ChatMessage::user("y".into()), 1);
+        session.push_message(ChatMessage::tool_result("call_1".into(), "done".into()), 1);
+
+        let msgs = session.prepare_for_request();
+        let roles: Vec<&str> = msgs.iter().map(|m| m.role.as_str()).collect();
+        assert_eq!(roles, vec!["user", "assistant", "tool", "user"]);
+        assert_eq!(msgs[2].content, "done");
+        assert_eq!(msgs[3].content, "y");
+    }
+
+    #[test]
+    fn prepare_for_request_synthesizes_missing_tool_result() {
+        let mut session = Session::new("test", "tui", "tui", 1000, None);
+        session.push_message(ChatMessage::user("start".into()), 1);
+        session.push_message(assistant_call("call_1"), 1);
+        session.push_message(ChatMessage::user("next".into()), 1);
+
+        let msgs = session.prepare_for_request();
+        let roles: Vec<&str> = msgs.iter().map(|m| m.role.as_str()).collect();
+        assert_eq!(roles, vec!["user", "assistant", "tool", "user"]);
+        assert!(msgs[2].content.contains("tool result missing"));
+        assert_eq!(msgs[2].tool_call_id.as_deref(), Some("call_1"));
+    }
+
+    #[test]
+    fn prepare_for_request_drops_orphan_tool_messages() {
+        let mut session = Session::new("test", "tui", "tui", 1000, None);
+        session.push_message(ChatMessage::user("one".into()), 1);
+        session.push_message(ChatMessage::tool_result("ghost".into(), "orphan".into()), 1);
+        session.push_message(ChatMessage::user("two".into()), 1);
+
+        let msgs = session.prepare_for_request();
+        let roles: Vec<&str> = msgs.iter().map(|m| m.role.as_str()).collect();
+        assert_eq!(roles, vec!["user", "user"]);
     }
 }
