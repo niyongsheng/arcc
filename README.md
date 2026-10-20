@@ -2,7 +2,8 @@
 
 # ARCC
 
-**[ARCC](https://juejin.cn/post/7650384140925812751) (A Rust Copilot CLI)** — Rust-based local-first AI Agent with CLI/TUI/Server modes, supports MCP & ACP protocols, connected to DeepSeek/Claude/OpenAI, built-in safety engine and SQLite persistence.
+**[ARCC](https://juejin.cn/post/7650384140925812751) (A Rust Copilot CLI)** — Rust-based local-first AI Agent with CLI/TUI/Server modes, supports MCP & ACP protocols, connected to DeepSeek/Claude/OpenAI, built-in safety engine and SQLite persistence.  
+Rust 实现的终端 AI Agent，支持 CLI、TUI、Server 三种运行模式；兼容 MCP、ACP 协议；内置安全引擎，SQLite 做持久化存储。
 
 [![Rust](https://img.shields.io/badge/Rust-2024-%23DEA584?logo=rust)](https://www.rust-lang.org)
 [![DeepSeek](https://img.shields.io/badge/DeepSeek-V4-%234A90D9)](https://deepseek.com)
