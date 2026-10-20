@@ -7,7 +7,8 @@
 //!
 //! # DSML format (V4)
 //!
-//! The delimiter is DOUBLE U+FF5C (FULLWIDTH VERTICAL LINE):
+//! The delimiter is one or two U+FF5C (FULLWIDTH VERTICAL LINE) on each side
+//! of `DSML`.  The canonical form uses a single bar:
 //!
 //! ```text
 //! <..DSML..tool_calls>
@@ -17,21 +18,168 @@
 //! </..DSML..tool_calls>
 //! ```
 //!
+//! Live V4 streams also emit mangled variants, which the matcher accepts:
+//!
+//! ```text
+//! <｜｜DSML｜｜tool_calls>   (double bars)
+//! <｜｜DSML｜｜ calls>        (double bars, space, bare `calls`)
+//! <｜｜DSML｜｜ invoke ...>  (space after the marker)
+//! ```
+//!
 //! Each `..` represents one U+FF5C character.
 
 use super::types::ToolCall;
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
-// DSML tag constants (V4 format — uses DOUBLE U+FF5C delimiters)
+// DSML tag constants
 // ---------------------------------------------------------------------------
 
+/// Canonical (unmangled) opening tag, kept for tests and documentation.
+#[cfg(test)]
 const TAG_TOOL_CALLS_OPEN: &str = "<\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C}tool_calls>";
+/// Canonical (unmangled) closing tag, kept for tests and documentation.
+#[cfg(test)]
 const TAG_TOOL_CALLS_CLOSE: &str = "</\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C}tool_calls>";
-const TAG_INVOKE_PREFIX: &str = "<\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C}invoke";
-const TAG_INVOKE_CLOSE: &str = "</\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C}invoke>";
-const TAG_PARAM_PREFIX: &str = "<\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C}parameter";
-const TAG_PARAM_CLOSE: &str = "</\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C}parameter>";
+
+/// Accepted marker forms.
+///
+/// `｜` is U+FF5C (FULLWIDTH VERTICAL LINE).  DeepSeek emits one *or* two of
+/// them on each side of `DSML`, and the two sides are not necessarily
+/// symmetric.  Longer forms must come first so prefix stripping consumes the
+/// full marker.
+const MARKER_FORMS: [&str; 4] = [
+    "\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C}",
+    "\u{FF5C}\u{FF5C}DSML\u{FF5C}",
+    "\u{FF5C}DSML\u{FF5C}\u{FF5C}",
+    "\u{FF5C}DSML\u{FF5C}",
+];
+
+/// Accepted names for the outer tool-call block.
+///
+/// `tool_calls` is canonical; live V4 streams also emit the mangled bare
+/// `calls` form (observed: `<｜｜DSML｜｜ calls>`).  V3.2 used `function_calls`.
+const TOOL_CALL_TAGS: [&str; 3] = ["tool_calls", "calls", "function_calls"];
+const INVOKE_TAGS: [&str; 1] = ["invoke"];
+const PARAMETER_TAGS: [&str; 1] = ["parameter"];
+
+/// Strip a leading DSML marker (one or two bars on each side of `DSML`).
+fn strip_marker(text: &str) -> Option<&str> {
+    MARKER_FORMS.iter().find_map(|m| text.strip_prefix(m))
+}
+
+/// Match an opening tag at the start of `text`.
+///
+/// Accepts optional whitespace after the marker and between the tag name and
+/// its attributes, e.g. `<｜｜DSML｜｜ calls>`,
+/// `<｜｜DSML｜｜ invoke name="execute_command">` and the canonical
+/// `<｜｜DSML｜｜tool_calls>`.
+///
+/// Returns the byte length of the matched tag (including `>`).
+fn match_open_tag_at(text: &str, names: &[&str]) -> Option<usize> {
+    let rest = text.strip_prefix('<')?;
+    let rest = strip_marker(rest)?;
+    let rest = rest.trim_start();
+
+    for name in names {
+        let Some(after) = rest.strip_prefix(name) else {
+            continue;
+        };
+        let trimmed = after.trim_start();
+        let ws_len = after.len() - trimmed.len();
+
+        let tag_tail = if trimmed.starts_with('>') {
+            // No attributes: `<marker name>`.
+            Some((ws_len, 1))
+        } else if ws_len > 0 {
+            // Attributes follow: `<marker name attr="...">`.
+            trimmed.find('>').map(|gt| (ws_len, gt + 1))
+        } else {
+            // `name` is merely a prefix of a longer identifier.
+            None
+        };
+
+        if let Some((ws, tail_len)) = tag_tail {
+            // `after` points just past the name.
+            return Some(text.len() - after.len() + ws + tail_len);
+        }
+    }
+    None
+}
+
+/// Match a closing tag at the start of `text`; returns its byte length.
+fn match_close_tag_at(text: &str, names: &[&str]) -> Option<usize> {
+    let rest = text.strip_prefix("</")?;
+    let rest = strip_marker(rest)?;
+    let rest = rest.trim_start();
+
+    for name in names {
+        let Some(after) = rest.strip_prefix(name) else {
+            continue;
+        };
+        let after = after.trim_start();
+        if let Some(remainder) = after.strip_prefix('>') {
+            return Some(text.len() - remainder.len());
+        }
+    }
+    None
+}
+
+/// Find the first opening tag from `names` in `haystack`.
+/// Returns `(start, end)` where `end` is the byte index just past the tag.
+fn find_open_tag(haystack: &str, names: &[&str]) -> Option<(usize, usize)> {
+    find_tag(haystack, names, false)
+}
+
+/// Find the first closing tag from `names` in `haystack`.
+/// Returns `(start, end)` where `end` is the byte index just past the tag.
+fn find_close_tag(haystack: &str, names: &[&str]) -> Option<(usize, usize)> {
+    find_tag(haystack, names, true)
+}
+
+fn find_tag(haystack: &str, names: &[&str], closing: bool) -> Option<(usize, usize)> {
+    let mut offset = 0;
+    while let Some(pos) = haystack[offset..].find('<') {
+        let start = offset + pos;
+        let matched = if closing {
+            match_close_tag_at(&haystack[start..], names)
+        } else {
+            match_open_tag_at(&haystack[start..], names)
+        };
+        if let Some(len) = matched {
+            return Some((start, start + len));
+        }
+        offset = start + 1;
+    }
+    None
+}
+
+/// Whether `s` could be a prefix of an opening `tool_calls` tag that is still
+/// arriving across chunks.  Used by the streaming accumulator to decide how
+/// much of the buffer tail must be held back.
+fn could_be_open_tag_prefix(s: &str) -> bool {
+    let Some(rest) = s.strip_prefix('<') else {
+        return false;
+    };
+    // A complete tag is handled by `find_open_tag`; never hold past `>`.
+    if rest.contains('>') {
+        return false;
+    }
+
+    // Still inside the marker itself.
+    if MARKER_FORMS.iter().any(|m| m.starts_with(rest)) {
+        return true;
+    }
+
+    // Past the marker: optional whitespace, then a partial tag name.
+    MARKER_FORMS.iter().any(|marker| {
+        let Some(after) = rest.strip_prefix(marker) else {
+            return false;
+        };
+        let after = after.trim_start();
+        after.is_empty() || TOOL_CALL_TAGS.iter().any(|name| name.starts_with(after))
+    })
+}
 
 // ---------------------------------------------------------------------------
 // Non-streaming parser
@@ -48,7 +196,7 @@ pub fn extract_tool_calls(content: &str) -> (String, Vec<ToolCall>) {
     let mut remaining = content;
 
     loop {
-        let Some(open_pos) = remaining.find(TAG_TOOL_CALLS_OPEN) else {
+        let Some((open_pos, block_start)) = find_open_tag(remaining, &TOOL_CALL_TAGS) else {
             cleaned.push_str(remaining);
             break;
         };
@@ -56,26 +204,27 @@ pub fn extract_tool_calls(content: &str) -> (String, Vec<ToolCall>) {
         // Emit content before the DSML block.
         cleaned.push_str(&remaining[..open_pos]);
 
-        let block_start = open_pos + TAG_TOOL_CALLS_OPEN.len();
-        let Some(close_pos) = remaining[block_start..].find(TAG_TOOL_CALLS_CLOSE) else {
+        let Some((close_pos, close_end)) =
+            find_close_tag(&remaining[block_start..], &TOOL_CALL_TAGS)
+        else {
             // No closing tag → block is incomplete; leave as text.
             cleaned.push_str(&remaining[open_pos..]);
             break;
         };
 
         let block_body = &remaining[block_start..block_start + close_pos];
-        // Skip past the closing tag.
-        remaining = &remaining[block_start + close_pos + TAG_TOOL_CALLS_CLOSE.len()..];
+        let block_end = block_start + close_end;
 
         // Parse invoke blocks within this tool_calls block.
         let parsed = parse_invoke_blocks(block_body);
         if parsed.is_empty() {
-            // If we couldn't parse any invokes, leave the block as text.
-            cleaned.push_str(TAG_TOOL_CALLS_OPEN);
-            cleaned.push_str(block_body);
-            cleaned.push_str(TAG_TOOL_CALLS_CLOSE);
+            // If we couldn't parse any invokes, leave the block untouched.
+            cleaned.push_str(&remaining[open_pos..block_end]);
         }
         tool_calls.extend(parsed);
+
+        // Skip past the closing tag.
+        remaining = &remaining[block_end..];
     }
 
     (cleaned, tool_calls)
@@ -86,13 +235,8 @@ fn parse_invoke_blocks(body: &str) -> Vec<ToolCall> {
     let mut tool_calls = Vec::new();
     let mut remaining = body;
 
-    while let Some(invoke_start) = remaining.find(TAG_INVOKE_PREFIX) {
-        // Find end of this invoke tag's opening `>`.
-        let tag_content_start = &remaining[invoke_start..];
-        let Some(gt_pos) = tag_content_start.find('>') else {
-            break;
-        };
-        let open_tag = &tag_content_start[..=gt_pos];
+    while let Some((invoke_start, body_start)) = find_open_tag(remaining, &INVOKE_TAGS) {
+        let open_tag = &remaining[invoke_start..body_start];
 
         // Extract name attribute.
         let Some(name) = extract_attr(open_tag, "name") else {
@@ -101,8 +245,8 @@ fn parse_invoke_blocks(body: &str) -> Vec<ToolCall> {
         };
 
         // Find matching close tag.
-        let body_start = invoke_start + gt_pos + 1;
-        let Some(close_pos) = remaining[body_start..].find(TAG_INVOKE_CLOSE) else {
+        let Some((close_pos, close_end)) = find_close_tag(&remaining[body_start..], &INVOKE_TAGS)
+        else {
             break;
         };
         let invoke_body = &remaining[body_start..body_start + close_pos];
@@ -111,12 +255,15 @@ fn parse_invoke_blocks(body: &str) -> Vec<ToolCall> {
         let arguments = parse_parameters(invoke_body);
 
         tool_calls.push(ToolCall {
-            id: format!("dsml_{}", Uuid::new_v4().to_string().replace('-', "")[..12].to_owned()),
+            id: format!(
+                "dsml_{}",
+                Uuid::new_v4().to_string().replace('-', "")[..12].to_owned()
+            ),
             name,
             arguments,
         });
 
-        remaining = &remaining[body_start + close_pos + TAG_INVOKE_CLOSE.len()..];
+        remaining = &remaining[body_start + close_end..];
     }
 
     tool_calls
@@ -127,12 +274,8 @@ fn parse_parameters(body: &str) -> serde_json::Value {
     let mut map = serde_json::Map::new();
     let mut remaining = body;
 
-    while let Some(param_start) = remaining.find(TAG_PARAM_PREFIX) {
-        let tag_content_start = &remaining[param_start..];
-        let Some(gt_pos) = tag_content_start.find('>') else {
-            break;
-        };
-        let open_tag = &tag_content_start[..=gt_pos];
+    while let Some((param_start, body_start)) = find_open_tag(remaining, &PARAMETER_TAGS) {
+        let open_tag = &remaining[param_start..body_start];
 
         // Extract name and string attributes.
         let Some(name) = extract_attr(open_tag, "name") else {
@@ -144,8 +287,9 @@ fn parse_parameters(body: &str) -> serde_json::Value {
             .unwrap_or(false);
 
         // Find matching close tag.
-        let body_start = param_start + gt_pos + 1;
-        let Some(close_pos) = remaining[body_start..].find(TAG_PARAM_CLOSE) else {
+        let Some((close_pos, close_end)) =
+            find_close_tag(&remaining[body_start..], &PARAMETER_TAGS)
+        else {
             break;
         };
         let value_text = &remaining[body_start..body_start + close_pos];
@@ -160,7 +304,7 @@ fn parse_parameters(body: &str) -> serde_json::Value {
         };
 
         map.insert(name, value);
-        remaining = &remaining[body_start + close_pos + TAG_PARAM_CLOSE.len()..];
+        remaining = &remaining[body_start + close_end..];
     }
 
     serde_json::Value::Object(map)
@@ -185,20 +329,22 @@ fn extract_attr(tag: &str, attr_name: &str) -> Option<String> {
     Some(after_eq[value_start..value_start + value_end].to_owned())
 }
 
-/// Return the length of the longest suffix of `buf` that is a prefix of `tag`.
+/// Return the length of the longest suffix of `buf` that could still become
+/// an opening `tool_calls` tag.
 ///
-/// This tells us how many characters we must keep in the buffer to avoid
-/// missing a tag split across two chunks.
-fn longest_partial_tag_suffix(buf: &str, tag: &str) -> usize {
-    for n in (1..=tag.len().min(buf.len())).rev() {
+/// This tells us how many bytes we must keep in the buffer to avoid missing a
+/// tag split across two chunks.  The scan is bounded: a complete opening tag
+/// is at most `<` + marker (16 bytes) + whitespace + longest name.
+fn longest_partial_open_tag_suffix(buf: &str) -> usize {
+    const MAX_TAG_LEN: usize = 64;
+    for n in (1..=MAX_TAG_LEN.min(buf.len())).rev() {
         let start = buf.len() - n;
         // Ensure we're on a UTF-8 character boundary — emoji and other
         // multi-byte characters would otherwise cause a panic.
         if !buf.is_char_boundary(start) {
             continue;
         }
-        let suffix = &buf[start..];
-        if tag.starts_with(suffix) {
+        if could_be_open_tag_prefix(&buf[start..]) {
             return n;
         }
     }
@@ -235,7 +381,7 @@ impl DsmlAccumulator {
 
         if !self.in_dsml {
             // Check if a DSML block has started.
-            if let Some(pos) = self.buf.find(TAG_TOOL_CALLS_OPEN) {
+            if let Some((pos, _end)) = find_open_tag(&self.buf, &TOOL_CALL_TAGS) {
                 if pos > 0 {
                     let prefix = self.buf[..pos].to_owned();
                     self.buf.drain(..pos);
@@ -246,7 +392,7 @@ impl DsmlAccumulator {
                 // Emit everything except a suffix that could be a partial
                 // match of the opening tag (so we don't miss a tag split
                 // across chunks).
-                let keep = longest_partial_tag_suffix(&self.buf, TAG_TOOL_CALLS_OPEN);
+                let keep = longest_partial_open_tag_suffix(&self.buf);
                 let safe_len = self.buf.len().saturating_sub(keep);
                 if safe_len > 0 {
                     let emit = self.buf[..safe_len].to_owned();
@@ -266,8 +412,7 @@ impl DsmlAccumulator {
         // appeared before the DSML opening tag.
         let prefix_content = before.take();
 
-        if let Some(close_pos) = self.buf.find(TAG_TOOL_CALLS_CLOSE) {
-            let dsml_end = close_pos + TAG_TOOL_CALLS_CLOSE.len();
+        if let Some((_close_pos, dsml_end)) = find_close_tag(&self.buf, &TOOL_CALL_TAGS) {
             let dsml_text = self.buf[..dsml_end].to_owned();
             let suffix = if dsml_end < self.buf.len() {
                 Some(self.buf[dsml_end..].to_owned())
@@ -374,11 +519,14 @@ mod tests {
 
     #[test]
     fn single_tool_call() {
-        let block = dsml_block(&invoke("get_weather", &format!(
-            "{}{}",
-            param("location", "Hangzhou", true),
-            param("date", "2026-06-09", true),
-        )));
+        let block = dsml_block(&invoke(
+            "get_weather",
+            &format!(
+                "{}{}",
+                param("location", "Hangzhou", true),
+                param("date", "2026-06-09", true),
+            ),
+        ));
         let input = format!("Let me check...{block}Done.");
         let (cleaned, tcs) = extract_tool_calls(&input);
         assert_eq!(cleaned, "Let me check...Done.");
@@ -467,7 +615,10 @@ mod tests {
         let flush = acc.flush();
         // Total emitted content should be "pre  post"
         let all_content = format!("{}{}", emit.unwrap_or_default(), flush.unwrap_or_default());
-        assert!(!all_content.contains(TAG_TOOL_CALLS_OPEN), "DSML tags should be stripped");
+        assert!(
+            !all_content.contains(TAG_TOOL_CALLS_OPEN),
+            "DSML tags should be stripped"
+        );
     }
 
     #[test]
@@ -489,7 +640,10 @@ mod tests {
     #[test]
     fn accumulator_incomplete_dsml_flushed_as_text() {
         let mut acc = DsmlAccumulator::default();
-        let incomplete = format!("{TAG_TOOL_CALLS_OPEN}{}", "<\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C}invoke name=\"x\">");
+        let incomplete = format!(
+            "{TAG_TOOL_CALLS_OPEN}{}",
+            "<\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C}invoke name=\"x\">"
+        );
         let (_emit, tcs) = acc.ingest(&incomplete);
         assert!(tcs.is_empty());
         // Flush should return the incomplete DSML as text.
@@ -501,21 +655,162 @@ mod tests {
     #[test]
     fn debug_longest_partial_tag_suffix() {
         let tag = TAG_TOOL_CALLS_OPEN;
-        eprintln!("tag ({} chars, {} bytes): {:?}", tag.chars().count(), tag.len(), tag);
+        eprintln!(
+            "tag ({} chars, {} bytes): {:?}",
+            tag.chars().count(),
+            tag.len(),
+            tag
+        );
         // buf = "<"
         let buf = "<";
-        let keep = longest_partial_tag_suffix(buf, tag);
+        let keep = longest_partial_open_tag_suffix(buf);
         eprintln!("buf={buf:?} len={} keep={keep}", buf.len());
         assert_eq!(keep, 1, "< alone should have keep=1 (it's the tag prefix)");
 
         // buf = "<\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C}"
         let buf2 = "<\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C}";
-        let keep2 = longest_partial_tag_suffix(buf2, tag);
+        let keep2 = longest_partial_open_tag_suffix(buf2);
         eprintln!("buf2.len={} keep={keep2}", buf2.len());
         assert!(keep2 > 0, "partial tag should be recognized as prefix");
 
+        // Mangled V4 form, still arriving: "<｜｜DSML｜｜ calls"
+        let buf3 = "<\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C} calls";
+        assert_eq!(longest_partial_open_tag_suffix(buf3), buf3.len());
+
         // Check that tag.starts_with("<") is true
         assert!(tag.starts_with("<"), "tag should start with '<'");
+    }
+
+    // --- mangled live-stream formats ---
+
+    /// The exact markup DeepSeek-V4 produced in the failing session:
+    /// a space after the marker and a bare `calls` wrapper.
+    fn mangled_block(invokes: &str) -> String {
+        format!(
+            "<\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C} calls>\n{invokes}\n</\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C} calls>"
+        )
+    }
+
+    fn mangled_invoke(name: &str, params: &str) -> String {
+        format!(
+            "<\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C} invoke name=\"{name}\">\n{params}\n</\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C} invoke>"
+        )
+    }
+
+    fn mangled_param(name: &str, value: &str, is_string: bool) -> String {
+        format!(
+            "<\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C} parameter name=\"{name}\" string=\"{s}\">{value}</\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C} parameter>",
+            s = if is_string { "true" } else { "false" }
+        )
+    }
+
+    #[test]
+    fn mangled_v4_live_format() {
+        let block = mangled_block(&mangled_invoke(
+            "execute_command",
+            &format!(
+                "{}{}",
+                mangled_param("command", "ls -la", true),
+                mangled_param("interactive", "false", false),
+            ),
+        ));
+        let input = format!("好的，现在执行：\n\n{block}\n");
+
+        let (cleaned, tcs) = extract_tool_calls(&input);
+        assert_eq!(cleaned.trim(), "好的，现在执行：");
+        assert_eq!(tcs.len(), 1);
+        assert_eq!(tcs[0].name, "execute_command");
+        assert_eq!(tcs[0].arguments["command"], "ls -la");
+        assert_eq!(tcs[0].arguments["interactive"], false);
+    }
+
+    #[test]
+    fn mangled_v4_streaming_split_chunks() {
+        // Replay the exact chunk sequence observed in tui.log.
+        let mut acc = DsmlAccumulator::default();
+        let chunks = [
+            "现在为你打开豆包：\n\n",
+            "<",
+            "\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C}",
+            " calls",
+            ">\n",
+            "<",
+            "\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C}",
+            " invoke",
+            " name",
+            "=\"execute_command\"",
+            ">\n",
+            "<",
+            "\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C}",
+            " parameter",
+            " name",
+            "=\"command\"",
+            " string",
+            "=\"true\"",
+            ">",
+            "open -a \"/Applications/Doubao.app\"",
+            "</",
+            "\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C}",
+            " parameter",
+            ">\n",
+            "</",
+            "\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C}",
+            " invoke",
+            ">\n",
+            "</",
+            "\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C}",
+            " calls",
+            ">\n",
+        ];
+
+        let mut emitted = String::new();
+        let mut calls = Vec::new();
+        for chunk in chunks {
+            let (content, tcs) = acc.ingest(chunk);
+            if let Some(c) = content {
+                emitted.push_str(&c);
+            }
+            calls.extend(tcs);
+        }
+        emitted.push_str(&acc.flush().unwrap_or_default());
+
+        assert_eq!(emitted.trim(), "现在为你打开豆包：");
+        assert!(!emitted.contains("DSML"));
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "execute_command");
+        assert_eq!(
+            calls[0].arguments["command"],
+            "open -a \"/Applications/Doubao.app\""
+        );
+    }
+
+    #[test]
+    fn canonical_single_bar_format() {
+        let block = "<\u{FF5C}DSML\u{FF5C}tool_calls><\u{FF5C}DSML\u{FF5C}invoke name=\"bash\"><\u{FF5C}DSML\u{FF5C}parameter name=\"command\" string=\"true\">uname -a</\u{FF5C}DSML\u{FF5C}parameter></\u{FF5C}DSML\u{FF5C}invoke></\u{FF5C}DSML\u{FF5C}tool_calls>";
+        let (cleaned, tcs) = extract_tool_calls(block);
+        assert!(cleaned.is_empty());
+        assert_eq!(tcs.len(), 1);
+        assert_eq!(tcs[0].name, "bash");
+        assert_eq!(tcs[0].arguments["command"], "uname -a");
+    }
+
+    #[test]
+    fn function_calls_wrapper() {
+        let block = "<\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C}function_calls><\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C}invoke name=\"f\"><\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C}parameter name=\"x\" string=\"false\">1</\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C}parameter></\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C}invoke></\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C}function_calls>";
+        let (_, tcs) = extract_tool_calls(block);
+        assert_eq!(tcs.len(), 1);
+        assert_eq!(tcs[0].name, "f");
+        assert_eq!(tcs[0].arguments["x"], 1);
+    }
+
+    #[test]
+    fn less_than_in_text_not_held() {
+        // A lone '<' that turns out to be ordinary text must not swallow
+        // following content.
+        let mut acc = DsmlAccumulator::default();
+        let (emit, _) = acc.ingest("1 < 2");
+        assert_eq!(emit.as_deref(), Some("1 < 2"));
+        assert!(acc.flush().is_none());
     }
 
     #[test]
@@ -560,13 +855,19 @@ mod tests {
         let mut acc = DsmlAccumulator::default();
         // "先查一下系统信息 <\|DSML\|tool_calls>..."
         let (emit, tcs) = acc.ingest("先查一下系统信息 <");
-        assert_eq!(emit.as_deref(), Some("先查一下系统信息 "),
-            "text before '<' should be emitted");
+        assert_eq!(
+            emit.as_deref(),
+            Some("先查一下系统信息 "),
+            "text before '<' should be emitted"
+        );
         assert!(tcs.is_empty());
 
         // The '<' is now in the buffer as a potential tag start
         let (emit, tcs) = acc.ingest("\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C}");
-        assert!(emit.is_none(), "text after '<' should be held as partial tag");
+        assert!(
+            emit.is_none(),
+            "text after '<' should be held as partial tag"
+        );
         assert!(tcs.is_empty());
 
         let (emit, tcs) = acc.ingest("tool_calls>");

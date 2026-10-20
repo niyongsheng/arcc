@@ -20,24 +20,35 @@ DeepSeek-V4 使用 **双 U+FF5C**（FULLWIDTH VERTICAL LINE）作为标签定界
 </\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C}tool_calls>
 ```
 
-**注意事项：** 早期版本的 DeepSeek API 使用单 U+FF5C 定界符，V4 版本已升级为双 U+FF5C。如果版本升级，需要同步更新标签常量。
+**注意事项：** 定界符每侧可能是 **1 个或 2 个** U+FF5C，且实际流式输出里两侧数量不一定对称。V4 官方规范是单 `｜`，但线上 SSE 常见双 `｜｜`。解析层不能只匹配一种固定字符串。
+
+实测还出现过以下**变形（mangled）**形式，解析层必须全部兼容：
+
+```text
+<｜｜DSML｜｜tool_calls>                  # 双 U+FF5C
+<｜｜DSML｜｜ calls>                       # 双 U+FF5C + 空格 + 裸 calls（2026-10 线上实测）
+<｜｜DSML｜｜ invoke name="...">          # 标记后带空格
+</｜｜DSML｜｜ parameter>                  # 闭合标签同样带空格
+<｜DSML｜tool_calls>                      # 单 U+FF5C（官方规范）
+<｜｜DSML｜｜function_calls>               # V3.2 外层名
+```
 
 相关代码：`crates/arcc-core/src/model/dsml.rs`
 
 ```rust
-const TAG_TOOL_CALLS_OPEN: &str =
-    "<\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C}tool_calls>";
-const TAG_TOOL_CALLS_CLOSE: &str =
-    "</\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C}tool_calls>";
-const TAG_INVOKE_PREFIX: &str =
-    "<\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C}invoke";
-const TAG_INVOKE_CLOSE: &str =
-    "</\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C}invoke>";
-const TAG_PARAM_PREFIX: &str =
-    "<\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C}parameter";
-const TAG_PARAM_CLOSE: &str =
-    "</\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C}parameter>";
+/// 外层 tool-call 块可接受的标签名
+const TOOL_CALL_TAGS: [&str; 3] = ["tool_calls", "calls", "function_calls"];
+
+/// 每侧 1~2 个 U+FF5C 的标记形式，长形式在前
+const MARKER_FORMS: [&str; 4] = [
+    "\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C}",
+    "\u{FF5C}\u{FF5C}DSML\u{FF5C}",
+    "\u{FF5C}DSML\u{FF5C}\u{FF5C}",
+    "\u{FF5C}DSML\u{FF5C}",
+];
 ```
+
+标签匹配由 `match_open_tag_at` / `match_close_tag_at` 完成：跳过标记后允许任意空白，再匹配标签名；因此 `<｜｜DSML｜｜ calls>`、`<｜｜DSML｜｜ invoke ...>` 与规范形式走同一条解析路径。
 
 ## 流式处理的挑战
 
@@ -129,6 +140,26 @@ chunks = [
 
 在为用户输入添加 SQLite 持久化时，将用户消息推入 session，但 `prepare_for_request()` 已从 session 返回该消息，随后又在 `initial_messages` 中重复追加。API 收到 `[system, user, user]` 双用户消息，破坏了消息交替顺序，触发 "insufficient tool messages following tool_calls message" 错误。
 
+### Bug 5：解析层只匹配规范标签，漏掉线上 mangled 形式（dsml.rs）
+
+2026-10-20 的 TUI 会话（`1cc24686-877c-46b8-ad81-ca0c11e8a71a`）中，DeepSeek 实际输出的标签是：
+
+```text
+<｜｜DSML｜｜ calls>
+<｜｜DSML｜｜ invoke name="execute_command">
+<｜｜DSML｜｜ parameter name="command" string="true">open -a "/Applications/Doubao.app"</｜｜DSML｜｜ parameter>
+</｜｜DSML｜｜ invoke>
+</｜｜DSML｜｜ calls>
+```
+
+旧实现用固定常量 `<｜｜DSML｜｜tool_calls>` 做 `str::find`，与实际的 **空格 + 裸 `calls`** 不匹配：
+
+1. 累加器在收到 `" calls"` 时判定 `<｜｜DSML｜｜ calls` 不是标签前缀，把整段原始标签当作正文吐出；
+2. 由于始终没有进入 `in_dsml`，工具调用也不会被提取，命令根本没执行（审计日志无记录）；
+3. DSML 文本最终被持久化进 `messages` 表，用户看到原始标记。
+
+修复：改为结构化标签匹配器（`MARKER_FORMS` + `TOOL_CALL_TAGS` + 可选空白），流式部分用 `could_be_open_tag_prefix` 判断是否继续 hold，覆盖 1/2 个 U+FF5C、空格、`calls` / `tool_calls` / `function_calls` 等变体。
+
 ## DSML 累加器架构
 
 `DsmlAccumulator` 是一个状态机，设计用于流式内容：
@@ -137,17 +168,19 @@ chunks = [
 状态流转：
   in_dsml = false
     → 收到 content delta
-    → 缓存，检查是否匹配 TAG_TOOL_CALLS_OPEN
-    → 不匹配：用 longest_partial_tag_suffix 判断是否可能为标签前缀
+    → 缓存，用 find_open_tag 检查是否出现 tool-call 起始标签
+    → 未出现：用 longest_partial_open_tag_suffix / could_be_open_tag_prefix
+      判断尾部是否可能为标签前缀
       → 是前缀：继续缓存，不吐出内容
-      → 非前缀：吐出安全部分，丢弃非匹配部分
-    → 匹配：in_dsml = true
+      → 非前缀：吐出安全部分
+    → 出现：in_dsml = true
 
   in_dsml = true
     → 收到后续 content delta
-    → 缓存，检查是否匹配 TAG_TOOL_CALLS_CLOSE
-    → 不匹配：继续缓存
-    → 匹配：提取工具调用，吐出标签前后的干净内容，in_dsml = false
+    → 缓存，用 find_close_tag 检查是否出现外层闭合标签
+    → 未出现：继续缓存
+    → 出现：extract_tool_calls 提取工具调用，吐出标签前后的干净内容，
+      in_dsml = false
 ```
 
 `flush()` 方法在流结束时调用。如果仍有未闭合的 DSML 块，缓冲区内容作为普通文本返回。
@@ -156,13 +189,15 @@ chunks = [
 
 | 模块 | 文件 | 职责 |
 |------|------|------|
-| DSML 标签常量 | `crates/arcc-core/src/model/dsml.rs:29-34` | 定义所有 DSML 标签模式 |
-| 非流式解析器 | `crates/arcc-core/src/model/dsml.rs:43-80` | 用于完整文本的 DSML 提取 |
-| 流式累加器 | `crates/arcc-core/src/model/dsml.rs:238-360` | 状态机，逐 delta 处理 |
-| 部分标签匹配 | `crates/arcc-core/src/model/dsml.rs:202-214` | 防跨 chunk 标签拆分 |
-| 流式 content 处理 | `crates/arcc-core/src/model/deepseek.rs:585-605` | content 通道的 DSML 清洗 |
-| 流式 reasoning 处理 | `crates/arcc-core/src/model/deepseek.rs:569-579` | reasoning 通道的 DSML 清洗 |
-| finish_reason 处理 | `crates/arcc-core/src/model/deepseek.rs:617-631` | 工具调用完成后的累加器 flush |
+| DSML 标记/标签常量 | `crates/arcc-core/src/model/dsml.rs:51-64` | `MARKER_FORMS` + `TOOL_CALL_TAGS` |
+| 标签匹配器 | `crates/arcc-core/src/model/dsml.rs:79-157` | `match_open_tag_at` / `match_close_tag_at` / `find_*_tag` |
+| 非流式解析器 | `crates/arcc-core/src/model/dsml.rs:193-230` | `extract_tool_calls` |
+| 参数/invoke 解析 | `crates/arcc-core/src/model/dsml.rs:234-305` | `parse_invoke_blocks` / `parse_parameters` |
+| 部分标签匹配 | `crates/arcc-core/src/model/dsml.rs:160-190,338` | `could_be_open_tag_prefix` / `longest_partial_open_tag_suffix` |
+| 流式累加器 | `crates/arcc-core/src/model/dsml.rs:363-455` | 状态机，逐 delta 处理 |
+| 流式 content 处理 | `crates/arcc-core/src/model/deepseek.rs:646-668` | content 通道的 DSML 清洗 |
+| 流式 reasoning 处理 | `crates/arcc-core/src/model/deepseek.rs:627-637` | reasoning 通道的 DSML 清洗 |
+| finish_reason 处理 | `crates/arcc-core/src/model/deepseek.rs:691-724` | 工具调用完成后的累加器 flush |
 
 ## 测试覆盖
 
@@ -184,6 +219,11 @@ chunks = [
 | `debug_longest_partial_tag_suffix` | 部分标签匹配函数的准确性验证 |
 | `partial_tag_held_across_many_small_deltas` | 逐字符流式拆分的正确 hold（Bug 3 专用） |
 | `partial_tag_in_chunks_with_leading_text` | 前导文本 + 逐 chunk DSML 标签 |
+| `mangled_v4_live_format` | `<｜｜DSML｜｜ calls>` + 空格标签（Bug 5 线上原文） |
+| `mangled_v4_streaming_split_chunks` | 按 tui.log 实测 chunk 序列回放（Bug 5 专用） |
+| `canonical_single_bar_format` | 官方单 `｜` 规范形式 |
+| `function_calls_wrapper` | V3.2 `function_calls` 外层名 |
+| `less_than_in_text_not_held` | 普通文本中的 `<` 不被误 hold |
 
 ## Debug 方法
 
