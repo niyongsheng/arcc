@@ -16,6 +16,8 @@ pub struct ArccConfig {
     #[serde(default)]
     pub execution: ExecutionConfig,
     #[serde(default)]
+    pub computer_use: ComputerUseConfig,
+    #[serde(default)]
     pub storage: StorageConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
@@ -94,8 +96,13 @@ impl Default for SafetyConfig {
     fn default() -> Self {
         Self {
             require_human_confirm: vec![
-                "rm".into(), "mv".into(), "dd".into(), "mkfs".into(),
-                "shutdown".into(), "reboot".into(), "fdisk".into(),
+                "rm".into(),
+                "mv".into(),
+                "dd".into(),
+                "mkfs".into(),
+                "shutdown".into(),
+                "reboot".into(),
+                "fdisk".into(),
             ],
         }
     }
@@ -114,6 +121,60 @@ impl Default for ExecutionConfig {
         Self {
             command_timeout_seconds: default_command_timeout(),
             max_output_bytes: default_max_output_bytes(),
+        }
+    }
+}
+
+/// Desktop computer-use settings (TUI, macOS).
+///
+/// Disabled by default. Enabling it lets the model take screenshots and
+/// synthesize mouse/keyboard input; every input action is confirmed in the
+/// TUI unless `require_confirmation = false`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ComputerUseConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_true")]
+    pub require_confirmation: bool,
+    /// How long the TUI waits for a y/a/n answer before rejecting the action.
+    #[serde(default = "default_confirm_timeout")]
+    pub confirmation_timeout_seconds: u64,
+    /// Maximum screenshot→action rounds per user prompt.
+    #[serde(default = "default_computer_max_rounds")]
+    pub max_rounds: u32,
+    /// Screenshots are downscaled to this width before being sent to the model.
+    #[serde(default = "default_max_screenshot_width")]
+    pub max_screenshot_width: u32,
+    /// How many historical screenshots stay attached to the request context.
+    #[serde(default = "default_keep_screenshots")]
+    pub keep_screenshots: usize,
+    /// Capture a verification screenshot after each mutating action.
+    #[serde(default = "default_true")]
+    pub capture_after_action: bool,
+    /// Delay before the post-action screenshot so the UI can settle.
+    #[serde(default = "default_action_settle_ms")]
+    pub action_settle_ms: u64,
+    /// Provider used for image-bearing requests. Empty = flash_model.
+    #[serde(default)]
+    pub vision_model: String,
+    /// Persist screenshots under ~/.arcc/screenshots for debugging.
+    #[serde(default)]
+    pub save_screenshots: bool,
+}
+
+impl Default for ComputerUseConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            require_confirmation: true,
+            confirmation_timeout_seconds: default_confirm_timeout(),
+            max_rounds: default_computer_max_rounds(),
+            max_screenshot_width: default_max_screenshot_width(),
+            keep_screenshots: default_keep_screenshots(),
+            capture_after_action: true,
+            action_settle_ms: default_action_settle_ms(),
+            vision_model: String::new(),
+            save_screenshots: false,
         }
     }
 }
@@ -188,6 +249,24 @@ fn default_command_timeout() -> u64 {
 }
 fn default_max_output_bytes() -> usize {
     4096
+}
+fn default_true() -> bool {
+    true
+}
+fn default_confirm_timeout() -> u64 {
+    120
+}
+fn default_computer_max_rounds() -> u32 {
+    20
+}
+fn default_max_screenshot_width() -> u32 {
+    1280
+}
+fn default_keep_screenshots() -> usize {
+    1
+}
+fn default_action_settle_ms() -> u64 {
+    250
 }
 fn default_log_level() -> String {
     "info".into()
@@ -300,4 +379,40 @@ pub enum ConfigError {
     },
     #[error("failed to parse config: {0}")]
     Parse(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn computer_use_defaults_are_safe() {
+        let config = ArccConfig::default();
+        assert!(!config.computer_use.enabled);
+        assert!(config.computer_use.require_confirmation);
+        assert_eq!(config.computer_use.confirmation_timeout_seconds, 120);
+        assert_eq!(config.computer_use.max_rounds, 20);
+        assert_eq!(config.computer_use.max_screenshot_width, 1280);
+        assert_eq!(config.computer_use.keep_screenshots, 1);
+        assert_eq!(config.computer_use.action_settle_ms, 250);
+        assert!(!config.computer_use.save_screenshots);
+    }
+
+    #[test]
+    fn parses_computer_use_section() {
+        let config: ArccConfig = toml::from_str(
+            r#"
+            [computer_use]
+            enabled = true
+            max_rounds = 5
+            vision_model = "deepseek-flash"
+            "#,
+        )
+        .expect("valid config");
+        assert!(config.computer_use.enabled);
+        assert_eq!(config.computer_use.max_rounds, 5);
+        assert_eq!(config.computer_use.vision_model, "deepseek-flash");
+        // Unspecified fields keep their safe defaults.
+        assert!(config.computer_use.require_confirmation);
+    }
 }

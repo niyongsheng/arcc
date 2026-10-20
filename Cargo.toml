@@ -63,6 +63,12 @@ portable-pty = "0.8"
 # --- token counting ---
 tiktoken-rs = "0.6"
 
+# --- computer use (macOS only; see arcc-core target-specific deps) ---
+xcap = "0.9.8"
+enigo = { version = "0.6.1", default-features = false }
+image = { version = "0.25", default-features = false, features = ["png"] }
+base64 = "0.22"
+
 # --- misc ---
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }

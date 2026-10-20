@@ -124,7 +124,9 @@ impl Session {
     pub fn context(&self) -> Vec<ChatMessage> {
         let mut msgs = Vec::with_capacity(self.messages.len() + 1);
         if let Some(ref summary) = self.summary {
-            msgs.push(ChatMessage::system(format!("[conversation summary] {summary}")));
+            msgs.push(ChatMessage::system(format!(
+                "[conversation summary] {summary}"
+            )));
         }
         msgs.extend(self.messages.iter().cloned());
         msgs
@@ -181,12 +183,11 @@ impl Session {
 
                 // Replace messages with summary.
                 self.messages.clear();
-                self.messages.push_back(ChatMessage::assistant(format!("[summary] {summary_text}")));
+                self.messages
+                    .push_back(ChatMessage::assistant(format!("[summary] {summary_text}")));
                 self.summary = Some(summary_text);
                 self.persist_summary();
-                self.token_count = flash_provider.count_tokens(
-                    &self.messages[0].content
-                );
+                self.token_count = flash_provider.count_tokens(&self.messages[0].content);
             }
             Err(e) => {
                 warn!(
@@ -197,9 +198,9 @@ impl Session {
                 // Fallback: drop oldest messages.
                 while self.token_count > self.context_max_tokens && self.messages.len() > 2 {
                     if let Some(msg) = self.messages.pop_front() {
-                        self.token_count = self.token_count.saturating_sub(
-                            flash_provider.count_tokens(&msg.content),
-                        );
+                        self.token_count = self
+                            .token_count
+                            .saturating_sub(flash_provider.count_tokens(&msg.content));
                     }
                 }
             }
@@ -246,7 +247,9 @@ impl Session {
         // Retroactively persist messages that were pushed before persistence
         // was enabled.  Token counts are not available at this point, so we
         // store NULL — they are still tracked in the in-memory counter.
-        if let Some(ref db_lock) = self.db && let Ok(conn) = db_lock.lock() {
+        if let Some(ref db_lock) = self.db
+            && let Ok(conn) = db_lock.lock()
+        {
             if let Ok(mut stmt) = conn.prepare(
                 "INSERT INTO messages (session_id, role, content, token_count, created_at)
                  VALUES (?1, ?2, ?3, NULL, datetime('now'))",
@@ -264,7 +267,7 @@ impl Session {
     }
 
     /// Prepare messages for an API request, sanitizing `reasoning_content` on
-    /// assistant tool-call messages when `thinking_mode` is enabled.
+    /// assistant tool-call messages.
     ///
     /// DeepSeek V4's thinking-mode API requires every assistant message carrying
     /// `tool_calls` to also include a non-empty `reasoning_content` field on
@@ -272,17 +275,20 @@ impl Session {
     ///
     /// This method:
     /// 1. Returns `context()` (messages + optional summary).
-    /// 2. If `thinking_mode = true`, injects a `"(reasoning omitted)"` placeholder
-    ///    into any assistant tool-call message whose `reasoning_content` is missing
-    ///    or empty.  This mirrors CodeWhale's `sanitize_thinking_mode_messages()`.
+    /// 2. Injects a `"(reasoning omitted)"` placeholder into any assistant
+    ///    tool-call message whose `reasoning_content` is missing or empty.
+    ///    This mirrors CodeWhale's `sanitize_thinking_mode_messages()`.
+    ///
+    /// The placeholder is added **unconditionally**: the DeepSeek endpoint may
+    /// run in thinking mode even when the client did not send
+    /// `thinking: enabled` (observed on `deepseek-flash`), and the API ignores
+    /// `reasoning_content` when thinking is actually disabled.  The reverse
+    /// case — a tool-call turn with no reasoning — is a hard 400.
     ///
     /// The stored session messages are **not** modified — placeholders exist only
     /// in the returned `Vec` for the wire format.
-    pub fn prepare_for_request(&self, thinking_mode: bool) -> Vec<ChatMessage> {
+    pub fn prepare_for_request(&self) -> Vec<ChatMessage> {
         let mut msgs = self.context();
-        if !thinking_mode {
-            return msgs;
-        }
         for msg in &mut msgs {
             if msg.role != "assistant" {
                 continue;
@@ -302,6 +308,27 @@ impl Session {
         msgs
     }
 
+    /// Drop images from all but the newest `keep_last` image-bearing messages.
+    ///
+    /// Used by computer-use to bound context size: the model only needs the
+    /// latest screenshot, while older messages keep their text labels. Images
+    /// are never persisted to SQLite, so this only affects in-memory history.
+    pub fn prune_images(&mut self, keep_last: usize) {
+        let mut seen = 0usize;
+        for msg in self.messages.iter_mut().rev() {
+            if msg.images.is_empty() {
+                continue;
+            }
+            seen += 1;
+            if seen > keep_last {
+                msg.images.clear();
+                if !msg.content.contains("[image omitted]") {
+                    msg.content.push_str(" [image omitted]");
+                }
+            }
+        }
+    }
+
     /// Attach accumulated reasoning content to the most recent assistant message.
     ///
     /// Call this after streaming completes for a turn where `reasoning_content`
@@ -313,7 +340,12 @@ impl Session {
         if text.is_empty() {
             return;
         }
-        if let Some(msg) = self.messages.iter_mut().rev().find(|m| m.role == "assistant") {
+        if let Some(msg) = self
+            .messages
+            .iter_mut()
+            .rev()
+            .find(|m| m.role == "assistant")
+        {
             let existing = msg.reasoning_content.get_or_insert(String::new());
             // Only append if the reasoning wasn't already set (e.g. during
             // the tool-call loop we may have pushed it up to that point).
@@ -380,7 +412,10 @@ impl SessionManager {
             self.context_max_tokens,
             self.db.clone(),
         )));
-        self.sessions.write().await.insert(id.clone(), Arc::clone(&session));
+        self.sessions
+            .write()
+            .await
+            .insert(id.clone(), Arc::clone(&session));
         info!(%id, name, mode, "session created");
         session
     }
@@ -396,9 +431,9 @@ impl SessionManager {
     /// This is an O(n) lookup — use sparingly.
     pub async fn find_by_name(&self, name: &str) -> Option<Arc<RwLock<Session>>> {
         let map = self.sessions.read().await;
-        map.values().find(|s| {
-            s.try_read().ok().is_some_and(|guard| guard.name == name)
-        }).cloned()
+        map.values()
+            .find(|s| s.try_read().ok().is_some_and(|guard| guard.name == name))
+            .cloned()
     }
 
     /// Get an existing session by name, or create a new one if none exists.
@@ -438,5 +473,118 @@ impl SessionManager {
                 session.compress(flash_provider).await;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::types::{ChatMessage, ImageAttachment, ToolCall};
+
+    fn image() -> ImageAttachment {
+        ImageAttachment {
+            mime: "image/png".into(),
+            data_base64: "AAAA".into(),
+            width: 1,
+            height: 1,
+        }
+    }
+
+    #[test]
+    fn prune_images_keeps_only_the_latest() {
+        let mut session = Session::new("test", "tui", "tui", 1000, None);
+        session.push_message(
+            ChatMessage::user("one".into()).with_images(vec![image()]),
+            1,
+        );
+        session.push_message(
+            ChatMessage::user("two".into()).with_images(vec![image()]),
+            1,
+        );
+        session.push_message(
+            ChatMessage::user("three".into()).with_images(vec![image()]),
+            1,
+        );
+
+        session.prune_images(1);
+
+        let messages = &session.messages;
+        assert!(!messages[0].has_images());
+        assert!(!messages[1].has_images());
+        assert!(messages[2].has_images());
+        // Text labels survive so the conversation still reads sensibly.
+        assert!(messages[0].content.starts_with("one"));
+        assert!(messages[0].content.contains("[image omitted]"));
+    }
+
+    #[test]
+    fn prune_images_with_zero_clears_everything() {
+        let mut session = Session::new("test", "tui", "tui", 1000, None);
+        session.push_message(
+            ChatMessage::user("one".into()).with_images(vec![image()]),
+            1,
+        );
+        session.prune_images(0);
+        assert!(session.messages.iter().all(|m| m.images.is_empty()));
+    }
+
+    #[test]
+    fn prepare_for_request_fills_missing_reasoning_on_tool_calls() {
+        // Reproduces the DSML-recovered Phase-2 turn that triggered:
+        // 400 "The `reasoning_content` in the thinking mode must be passed back".
+        let mut session = Session::new("test", "tui", "tui", 1000, None);
+        session.push_message(ChatMessage::user("hi".into()), 1);
+        session.push_message(
+            ChatMessage {
+                role: "assistant".into(),
+                content: String::new(),
+                images: Vec::new(),
+                tool_calls: Some(vec![ToolCall {
+                    id: "call_1".into(),
+                    name: "computer".into(),
+                    arguments: serde_json::json!({"action": "screenshot"}),
+                }]),
+                tool_call_id: None,
+                reasoning_content: None,
+            },
+            1,
+        );
+        session.push_message(ChatMessage::tool_result("call_1".into(), "ok".into()), 1);
+
+        let msgs = session.prepare_for_request();
+        let assistant = msgs
+            .iter()
+            .find(|m| m.role == "assistant")
+            .expect("assistant message missing");
+        assert_eq!(
+            assistant.reasoning_content.as_deref(),
+            Some("(reasoning omitted)")
+        );
+    }
+
+    #[test]
+    fn prepare_for_request_preserves_existing_reasoning() {
+        let mut session = Session::new("test", "tui", "tui", 1000, None);
+        session.push_message(
+            ChatMessage {
+                role: "assistant".into(),
+                content: "done".into(),
+                images: Vec::new(),
+                tool_calls: Some(vec![ToolCall {
+                    id: "call_1".into(),
+                    name: "execute_command".into(),
+                    arguments: serde_json::json!({"command": "ls"}),
+                }]),
+                tool_call_id: None,
+                reasoning_content: Some("real reasoning".into()),
+            },
+            1,
+        );
+
+        let msgs = session.prepare_for_request();
+        assert_eq!(
+            msgs[0].reasoning_content.as_deref(),
+            Some("real reasoning")
+        );
     }
 }

@@ -1,10 +1,27 @@
 use serde::{Deserialize, Serialize};
 
+/// A base64-encoded image attached to a chat message.
+///
+/// DeepSeek Chat Completions only accepts images on `user` messages, so
+/// `ChatMessage.images` is ignored by the provider for every other role.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ImageAttachment {
+    /// MIME type, e.g. `image/png`.
+    pub mime: String,
+    /// Base64 payload **without** the `data:<mime>;base64,` prefix.
+    pub data_base64: String,
+    pub width: u32,
+    pub height: u32,
+}
+
 /// Unified chat message.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
+    /// Images carried by this message (only meaningful for `user` messages).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<ImageAttachment>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -23,10 +40,22 @@ impl ChatMessage {
         Self {
             role: role.to_owned(),
             content,
+            images: Vec::new(),
             tool_calls: None,
             tool_call_id: None,
             reasoning_content: None,
         }
+    }
+
+    /// Attach images to this message (usually a user message).
+    pub fn with_images(mut self, images: Vec<ImageAttachment>) -> Self {
+        self.images = images;
+        self
+    }
+
+    /// True when this message carries at least one image.
+    pub fn has_images(&self) -> bool {
+        !self.images.is_empty()
     }
 
     /// Convenience constructor for system messages.
@@ -49,6 +78,7 @@ impl ChatMessage {
         Self {
             role: "tool".to_owned(),
             content,
+            images: Vec::new(),
             tool_calls: None,
             tool_call_id: Some(tool_call_id),
             reasoning_content: None,

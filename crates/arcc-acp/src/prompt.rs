@@ -191,6 +191,7 @@ pub async fn run_prompt(
             let assistant_msg = ChatMessage {
                 role: "assistant".into(),
                 content: content_buf.clone(),
+                images: Vec::new(),
                 tool_calls: if tool_calls.is_empty() {
                     None
                 } else {
@@ -392,7 +393,7 @@ async fn request_permission(
 /// and prior turns included, minus old system copies).
 async fn build_messages(handle: &AcpSessionHandle, system_msg: &ChatMessage) -> Vec<ChatMessage> {
     let s = handle.session.read().await;
-    let mut base = s.prepare_for_request(false);
+    let mut base = s.prepare_for_request();
     base.retain(|m| m.role != "system");
     std::iter::once(system_msg.clone()).chain(base).collect()
 }

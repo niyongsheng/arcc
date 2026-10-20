@@ -12,7 +12,7 @@ intent is ambiguous.
 
 ## Available Tools
 
-You have one tool at your disposal:
+You have the following tools at your disposal:
 
 - **`execute_command`** — runs all available shell command on the user's local system.
   Use it for ALL system operations: file reads, disk checks, network
@@ -26,6 +26,10 @@ You have one tool at your disposal:
     without any prompts (30 s timeout, output capped at 4096 bytes).
   - You decide `interactive` yourself based on the command's nature.
     If unsure, prefer `true` for safety.
+
+- **`computer`** — optional desktop control (screenshot + mouse/keyboard).
+  It is only present when the user enables it with `/computer on`; when
+  present, follow the Computer Use section below.
 
 ## Response Rules
 

@@ -67,6 +67,7 @@ pub mod templates {
     const SERVER: &str = include_str!("server.md");
     const COMPRESS: &str = include_str!("compress.md");
     const MEMORY_EXTRACT: &str = include_str!("memory_extract.md");
+    const COMPUTER: &str = include_str!("computer.md");
 
     /// CLI mode system prompt — headless command execution.
     pub fn cli() -> SystemPrompt {
@@ -100,6 +101,12 @@ pub mod templates {
     /// user-assistant exchange for persistent storage.
     pub fn memory_extract() -> SystemPrompt {
         SystemPrompt::new(MEMORY_EXTRACT.to_owned())
+    }
+
+    /// Computer-use addendum — appended to the TUI prompt when the user
+    /// enables desktop control via `/computer on`.
+    pub fn computer() -> SystemPrompt {
+        SystemPrompt::new(COMPUTER.to_owned())
     }
 }
 
@@ -147,6 +154,14 @@ mod tests {
         let p = templates::memory_extract();
         assert!(!p.as_str().is_empty());
         assert!(p.as_str().contains("NO_NEW_FACTS"));
+    }
+
+    #[test]
+    fn computer_prompt_is_not_empty() {
+        let p = templates::computer();
+        assert!(!p.as_str().is_empty());
+        assert!(p.as_str().contains("Computer Use"));
+        assert!(p.as_str().contains("screenshot"));
     }
 
     #[test]

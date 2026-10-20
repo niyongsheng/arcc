@@ -5,16 +5,16 @@
 
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
+use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
 use tracing::{debug, warn};
 
+use super::dsml;
 use super::provider::{ModelError, ModelProvider};
 use super::types::{ChatMessage, ChatRequest, ChatResponse, StreamChunk, ToolCall, Usage};
-use super::dsml;
 
 // ---------------------------------------------------------------------------
 // DeepSeek API types (OpenAI-compatible JSON)
@@ -55,13 +55,38 @@ struct ThinkingConfig {
 #[derive(Serialize, Clone)]
 struct DeepSeekMessage {
     role: String,
-    content: String,
+    content: MessageContent,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_calls: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning_content: Option<String>,
+}
+
+/// Message content is either a plain string (text-only) or an array of
+/// OpenAI-style content parts when the message carries images.
+#[derive(Serialize, Clone)]
+#[serde(untagged)]
+enum MessageContent {
+    Text(String),
+    Parts(Vec<ContentPart>),
+}
+
+#[derive(Serialize, Clone)]
+#[serde(tag = "type")]
+enum ContentPart {
+    #[serde(rename = "text")]
+    Text { text: String },
+    #[serde(rename = "image_url")]
+    Image { image_url: ImageUrl },
+}
+
+#[derive(Serialize, Clone)]
+struct ImageUrl {
+    url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -240,19 +265,22 @@ impl DeepSeekProvider {
         msgs.iter()
             .map(|m| DeepSeekMessage {
                 role: m.role.clone(),
-                content: m.content.clone(),
+                content: Self::convert_content(m),
                 tool_calls: m.tool_calls.as_ref().map(|tc_list| {
                     serde_json::Value::Array(
-                        tc_list.iter().map(|tc| {
-                            serde_json::json!({
-                                "id": tc.id,
-                                "type": "function",
-                                "function": {
-                                    "name": tc.name,
-                                    "arguments": tc.arguments.to_string(),
-                                }
+                        tc_list
+                            .iter()
+                            .map(|tc| {
+                                serde_json::json!({
+                                    "id": tc.id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": tc.name,
+                                        "arguments": tc.arguments.to_string(),
+                                    }
+                                })
                             })
-                        }).collect()
+                            .collect(),
                     )
                 }),
                 tool_call_id: m.tool_call_id.clone(),
@@ -262,6 +290,33 @@ impl DeepSeekProvider {
                 reasoning_content: m.reasoning_content.clone(),
             })
             .collect()
+    }
+
+    /// Build the wire content for one message.
+    ///
+    /// DeepSeek documents image blocks as **user-only**; if an image is
+    /// attached to any other role we fall back to plain text rather than
+    /// letting the API reject the request with a 400.
+    fn convert_content(m: &ChatMessage) -> MessageContent {
+        if m.role != "user" || m.images.is_empty() {
+            return MessageContent::Text(m.content.clone());
+        }
+
+        let mut parts = Vec::with_capacity(m.images.len() + 1);
+        parts.push(ContentPart::Text {
+            text: m.content.clone(),
+        });
+        for image in &m.images {
+            parts.push(ContentPart::Image {
+                image_url: ImageUrl {
+                    url: format!("data:{};base64,{}", image.mime, image.data_base64),
+                    // `original` avoids the 512x512 `low` downscale, which
+                    // would invalidate the pixel coordinates the model emits.
+                    detail: Some("original".into()),
+                },
+            });
+        }
+        MessageContent::Parts(parts)
     }
 
     fn convert_tools(&self, tools: &[super::types::ToolDefinition]) -> Vec<DeepSeekTool> {
@@ -297,7 +352,11 @@ impl DeepSeekProvider {
                         return Err(ModelError::RateLimited { retry_after_secs });
                     }
                     let wait = Duration::from_secs(retry_after_secs).max(delay);
-                    warn!(attempt, wait_ms = wait.as_millis(), "rate limited, retrying");
+                    warn!(
+                        attempt,
+                        wait_ms = wait.as_millis(),
+                        "rate limited, retrying"
+                    );
                     tokio::time::sleep(wait).await;
                     delay = (delay * 2).min(Duration::from_secs(30));
                     attempt += 1;
@@ -426,6 +485,7 @@ impl ModelProvider for DeepSeekProvider {
                 message: ChatMessage {
                     role: choice.message.role,
                     content: display_content,
+                    images: Vec::new(),
                     tool_calls,
                     tool_call_id: None,
                     // CRITICAL: reasoning_content must be included in the
@@ -444,17 +504,16 @@ impl ModelProvider for DeepSeekProvider {
     async fn chat_stream(
         &self,
         req: ChatRequest,
-    ) -> Result<
-        Box<dyn Stream<Item = Result<StreamChunk, ModelError>> + Send + Unpin>,
-        ModelError,
-    > {
+    ) -> Result<Box<dyn Stream<Item = Result<StreamChunk, ModelError>> + Send + Unpin>, ModelError>
+    {
         let api_messages = Self::convert_messages(&req.messages);
         let api_tools: Option<Vec<DeepSeekTool>> =
             req.tools.as_ref().map(|t| self.convert_tools(t));
 
-        let thinking = req.thinking_mode.as_ref().map(|mode| ThinkingConfig {
-            mode: mode.clone(),
-        });
+        let thinking = req
+            .thinking_mode
+            .as_ref()
+            .map(|mode| ThinkingConfig { mode: mode.clone() });
         let reasoning_effort = req.reasoning_effort.as_deref();
 
         let body = DeepSeekRequest {
@@ -514,7 +573,8 @@ impl ModelProvider for DeepSeekProvider {
                         if let Some(remnant) = dsml_acc.flush() {
                             let _ = tx.send(Ok(StreamChunk::Content(remnant))).await;
                         }
-                        if let Some(remnant) = reasoning_dsml_acc.flush().filter(|r| !r.is_empty()) {
+                        if let Some(remnant) = reasoning_dsml_acc.flush().filter(|r| !r.is_empty())
+                        {
                             let _ = tx.send(Ok(StreamChunk::Reasoning(remnant))).await;
                         }
                         continue;
@@ -541,7 +601,9 @@ impl ModelProvider for DeepSeekProvider {
                             if let Some(remnant) = dsml_acc.flush() {
                                 let _ = tx.send(Ok(StreamChunk::Content(remnant))).await;
                             }
-                            if let Some(remnant) = reasoning_dsml_acc.flush().filter(|r| !r.is_empty()) {
+                            if let Some(remnant) =
+                                reasoning_dsml_acc.flush().filter(|r| !r.is_empty())
+                            {
                                 let _ = tx.send(Ok(StreamChunk::Reasoning(remnant))).await;
                             }
                             break;
@@ -559,53 +621,51 @@ impl ModelProvider for DeepSeekProvider {
 
                         for choice in chunk.choices {
                             let delta = choice.delta;
-                            let is_tool_call_finish = choice.finish_reason
-                                .as_deref() == Some("tool_calls");
+                            let is_tool_call_finish =
+                                choice.finish_reason.as_deref() == Some("tool_calls");
 
                             // 1. Strip DSML from reasoning content.
                             if let Some(reasoning) = delta.reasoning_content
-                                && !reasoning.is_empty() {
-                                    let (clean_reasoning, _) = reasoning_dsml_acc.ingest(&reasoning);
-                                    if let Some(clean) = clean_reasoning
-                                        && !clean.is_empty() {
-                                            let _ = tx
-                                                .send(Ok(StreamChunk::Reasoning(clean)))
-                                                .await;
-                                        }
+                                && !reasoning.is_empty()
+                            {
+                                let (clean_reasoning, _) = reasoning_dsml_acc.ingest(&reasoning);
+                                if let Some(clean) = clean_reasoning
+                                    && !clean.is_empty()
+                                {
+                                    let _ = tx.send(Ok(StreamChunk::Reasoning(clean))).await;
                                 }
+                            }
 
                             // 2. Feed content through DSML accumulator (always, even if this
                             //    chunk also carries a finish_reason).  This ensures a DSML
                             //    close tag that arrives in the same SSE frame as
                             //    finish_reason:"tool_calls" is ingested before flush.
                             if let Some(content) = delta.content
-                                && !content.is_empty() {
-                                    let (clean_content, dsml_tcs) = dsml_acc.ingest(&content);
-                                    debug!(
-                                        raw_len = content.len(),
-                                        raw_first = %content.chars().take(8).collect::<String>(),
-                                        clean = clean_content.as_deref().unwrap_or("(none)"),
-                                        dsml_count = dsml_tcs.len(),
-                                        "dsml accumulator ingested content"
-                                    );
+                                && !content.is_empty()
+                            {
+                                let (clean_content, dsml_tcs) = dsml_acc.ingest(&content);
+                                debug!(
+                                    raw_len = content.len(),
+                                    raw_first = %content.chars().take(8).collect::<String>(),
+                                    clean = clean_content.as_deref().unwrap_or("(none)"),
+                                    dsml_count = dsml_tcs.len(),
+                                    "dsml accumulator ingested content"
+                                );
 
-                                    if let Some(clean) = clean_content
-                                        && !clean.is_empty() {
-                                            let _ = tx
-                                                .send(Ok(StreamChunk::Content(clean)))
-                                                .await;
-                                        }
-
-                                    for tc in dsml_tcs {
-                                        debug!(
-                                            tool_name = %tc.name,
-                                            "recovered tool call from DSML in stream"
-                                        );
-                                        let _ = tx
-                                            .send(Ok(StreamChunk::ToolCallStart(tc)))
-                                            .await;
-                                    }
+                                if let Some(clean) = clean_content
+                                    && !clean.is_empty()
+                                {
+                                    let _ = tx.send(Ok(StreamChunk::Content(clean))).await;
                                 }
+
+                                for tc in dsml_tcs {
+                                    debug!(
+                                        tool_name = %tc.name,
+                                        "recovered tool call from DSML in stream"
+                                    );
+                                    let _ = tx.send(Ok(StreamChunk::ToolCallStart(tc))).await;
+                                }
+                            }
 
                             // 3. Accumulate native tool call deltas.
                             if let Some(tc_list) = delta.tool_calls {
@@ -635,14 +695,11 @@ impl ModelProvider for DeepSeekProvider {
                                     let tc = ToolCall {
                                         id: tb.id.clone().unwrap_or_default(),
                                         name: tb.name.clone().unwrap_or_default(),
-                                        arguments: serde_json::from_str(&tb.arguments)
-                                            .unwrap_or(serde_json::Value::String(
-                                                tb.arguments.clone(),
-                                            )),
+                                        arguments: serde_json::from_str(&tb.arguments).unwrap_or(
+                                            serde_json::Value::String(tb.arguments.clone()),
+                                        ),
                                     };
-                                    let _ = tx
-                                        .send(Ok(StreamChunk::ToolCallStart(tc)))
-                                        .await;
+                                    let _ = tx.send(Ok(StreamChunk::ToolCallStart(tc))).await;
                                 }
                                 tool_builders.clear();
 
@@ -650,19 +707,23 @@ impl ModelProvider for DeepSeekProvider {
                                 // ingested in step 2 above).
                                 if let Some(remnant) = dsml_acc.flush() {
                                     if !remnant.is_empty() {
-                                        debug!(remnant_len = remnant.len(), "dsml_acc flush had remnant — DSML close tag may have been split across chunks");
-                                        let _ = tx
-                                            .send(Ok(StreamChunk::Content(remnant)))
-                                            .await;
+                                        debug!(
+                                            remnant_len = remnant.len(),
+                                            "dsml_acc flush had remnant — DSML close tag may have been split across chunks"
+                                        );
+                                        let _ = tx.send(Ok(StreamChunk::Content(remnant))).await;
                                     }
                                 } else {
                                     debug!("dsml_acc flush clean (no remnant)");
                                 }
-                                if let Some(remnant) = reasoning_dsml_acc.flush().filter(|r| !r.is_empty()) {
-                                    debug!(remnant_len = remnant.len(), "reasoning_dsml_acc flush had remnant");
-                                    let _ = tx
-                                        .send(Ok(StreamChunk::Reasoning(remnant)))
-                                        .await;
+                                if let Some(remnant) =
+                                    reasoning_dsml_acc.flush().filter(|r| !r.is_empty())
+                                {
+                                    debug!(
+                                        remnant_len = remnant.len(),
+                                        "reasoning_dsml_acc flush had remnant"
+                                    );
+                                    let _ = tx.send(Ok(StreamChunk::Reasoning(remnant))).await;
                                 }
                             }
                         }
@@ -759,7 +820,58 @@ mod tests {
 
         // Verify tools field is present
         assert!(json.contains("\"tools\""), "JSON must contain tools field");
-        assert!(json.contains("\"execute_command\""), "JSON must contain tool name");
-        assert!(json.contains("\"tool_choice\""), "JSON must contain tool_choice");
+        assert!(
+            json.contains("\"execute_command\""),
+            "JSON must contain tool name"
+        );
+        assert!(
+            json.contains("\"tool_choice\""),
+            "JSON must contain tool_choice"
+        );
+    }
+
+    #[test]
+    fn text_only_message_uses_string_content() {
+        let converted = DeepSeekProvider::convert_messages(&[ChatMessage::user("hello".into())]);
+        let json = serde_json::to_value(&converted[0]).unwrap();
+        assert_eq!(json["content"], "hello");
+    }
+
+    #[test]
+    fn user_message_with_image_uses_content_parts() {
+        let msg = ChatMessage::user("look at this".into()).with_images(vec![
+            crate::model::types::ImageAttachment {
+                mime: "image/png".into(),
+                data_base64: "AAAA".into(),
+                width: 1280,
+                height: 720,
+            },
+        ]);
+        let converted = DeepSeekProvider::convert_messages(&[msg]);
+        let json = serde_json::to_value(&converted[0]).unwrap();
+
+        assert_eq!(json["content"][0]["type"], "text");
+        assert_eq!(json["content"][0]["text"], "look at this");
+        assert_eq!(json["content"][1]["type"], "image_url");
+        assert_eq!(
+            json["content"][1]["image_url"]["url"],
+            "data:image/png;base64,AAAA"
+        );
+        assert_eq!(json["content"][1]["image_url"]["detail"], "original");
+    }
+
+    #[test]
+    fn images_on_non_user_roles_fall_back_to_text() {
+        let msg = ChatMessage::assistant("answer".into()).with_images(vec![
+            crate::model::types::ImageAttachment {
+                mime: "image/png".into(),
+                data_base64: "AAAA".into(),
+                width: 1,
+                height: 1,
+            },
+        ]);
+        let converted = DeepSeekProvider::convert_messages(&[msg]);
+        let json = serde_json::to_value(&converted[0]).unwrap();
+        assert_eq!(json["content"], "answer");
     }
 }

@@ -723,6 +723,7 @@ pub(crate) async fn process_feishu_chat(
                 ChatMessage {
                     role: "assistant".into(),
                     content: display_content.to_owned(),
+                    images: Vec::new(),
                     tool_calls: tool_calls_for_session,
                     tool_call_id: None,
                     reasoning_content: msg.reasoning_content.clone(),
@@ -744,6 +745,7 @@ pub(crate) async fn process_feishu_chat(
         messages.push(ChatMessage {
             role: "assistant".into(),
             content: display_content.to_owned(),
+            images: Vec::new(),
             tool_calls: msg.tool_calls.clone(),
             tool_call_id: None,
             reasoning_content: msg.reasoning_content.clone(),

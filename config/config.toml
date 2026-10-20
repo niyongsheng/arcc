@@ -51,6 +51,29 @@ command_timeout_seconds = 30
 # 命令输出最大字节数，超出的部分被截断
 max_output_bytes = 4096
 
+[computer_use]
+# 桌面控制（截图 + 鼠标/键盘），目前仅支持 macOS TUI。
+# 默认关闭；在 TUI 中用 /computer on 临时开启（每次启动仍需重新开启）。
+enabled = false
+# 每个鼠标/键盘动作是否需要在 TUI 中确认（y/a/n）。
+require_confirmation = true
+# 确认超时（秒），超时视为拒绝。
+confirmation_timeout_seconds = 120
+# 一次用户请求内最多允许的"截图→动作"轮数。
+max_rounds = 20
+# 截图发送给模型前缩放到该宽度（保持宽高比）。
+max_screenshot_width = 1280
+# 请求上下文中保留的历史截图数量（旧图只保留文字标签）。
+keep_screenshots = 1
+# 动作执行后是否自动截屏验证。
+capture_after_action = true
+# 动作后等待多少毫秒再截图，避免截到旧画面。
+action_settle_ms = 250
+# 处理图片请求的视觉模型；留空使用 flash_model。
+vision_model = ""
+# 是否把截图保存到 ~/.arcc/screenshots/ 便于调试。
+save_screenshots = false
+
 [storage]
 # SQLite 数据库路径（相对于 ~/.arcc/）
 db_path = "arcc.db"

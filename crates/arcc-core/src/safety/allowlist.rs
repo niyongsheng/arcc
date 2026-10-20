@@ -62,19 +62,19 @@ mod tests {
     #[test]
     fn safe_command_no_confirm() {
         let al = test_al();
-        assert_eq!(al.check("ls -la").unwrap(), false);
+        assert!(!al.check("ls -la").unwrap());
     }
 
     #[test]
     fn dangerous_command_needs_confirm() {
         let al = test_al();
-        assert_eq!(al.check("rm -rf /").unwrap(), true);
+        assert!(al.check("rm -rf /").unwrap());
     }
 
     #[test]
     fn approved_command_no_confirm() {
         let mut al = test_al();
         al.approve("rm".into());
-        assert_eq!(al.check("rm -rf /").unwrap(), false);
+        assert!(!al.check("rm -rf /").unwrap());
     }
 }

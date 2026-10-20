@@ -227,6 +227,7 @@ pub async fn run(
             messages.push(ChatMessage {
                 role: "assistant".into(),
                 content: String::new(),
+                images: Vec::new(),
                 tool_calls: Some(vec![tc.clone()]),
                 tool_call_id: None,
                 reasoning_content: if reasoning_buf.is_empty() { None } else { Some(reasoning_buf.clone()) },

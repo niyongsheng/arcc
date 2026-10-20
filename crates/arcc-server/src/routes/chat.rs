@@ -135,6 +135,7 @@ pub async fn handler(
                                 ChatMessage {
                                     role: "assistant".into(),
                                     content: full_response.clone(),
+                                    images: Vec::new(),
                                     tool_calls: None,
                                     tool_call_id: None,
                                     reasoning_content: if reasoning_buf.is_empty() {
