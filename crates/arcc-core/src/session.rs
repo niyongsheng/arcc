@@ -291,16 +291,6 @@ impl Session {
         }
     }
 
-    /// Clear all in-memory messages and reset token count.
-    ///
-    /// Used by TUI `/clear` to reset the conversation without dropping
-    /// the session or its DB records.
-    pub fn clear_messages(&mut self) {
-        self.messages.clear();
-        self.token_count = 0;
-        self.summary = None;
-    }
-
     /// Reset session with a fresh ID and empty context.
     ///
     /// DB connection is preserved so new messages persist under the new

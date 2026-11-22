@@ -737,6 +737,37 @@ impl App {
         }
     }
 
+    /// Discard model-output events queued by a turn that has just been aborted.
+    ///
+    /// Aborting the task stops further sends, but events it already emitted
+    /// still sit in the channel and would otherwise be applied to the
+    /// freshly cleared chat area.  Unrelated events (keystrokes, ticks,
+    /// metrics, …) are re-queued in their original order.
+    fn drain_stale_turn_events(&mut self) {
+        let mut deferred = Vec::new();
+        while let Ok(event) = self.event_rx.try_recv() {
+            match event {
+                AppEvent::Token(_)
+                | AppEvent::ToolExec(_)
+                | AppEvent::Reasoning(_)
+                | AppEvent::StreamDone
+                | AppEvent::PromptExpired => {}
+                AppEvent::Prompt(req) => {
+                    // The task awaiting this answer is gone.
+                    let _ = req.response_tx.send(None);
+                }
+                AppEvent::InteractiveCommand { .. } => {
+                    // Queued tool side effect of the aborted turn — do not
+                    // hand the terminal over to a command nobody awaits.
+                }
+                other => deferred.push(other),
+            }
+        }
+        for event in deferred {
+            let _ = self.event_tx.send(event);
+        }
+    }
+
     /// Handle a slash command directly (no LLM).
     fn dispatch_command(&mut self, input: &str) {
         let parts: Vec<&str> = input.split_whitespace().collect();
@@ -765,17 +796,37 @@ impl App {
             }
             "clear" => {
                 info!("session cleared — new UUID");
+                // Abort any in-flight turn and wait for it to actually stop —
+                // otherwise it could keep appending to the chat area being
+                // cleared, and might still hold the session lock.
+                if let Some(handle) = self.task_handle.take() {
+                    handle.abort();
+                    let _ = tokio::task::block_in_place(|| {
+                        tokio::runtime::Handle::current().block_on(handle)
+                    });
+                }
                 if let Some(pending) = self.pending_prompt.take() {
                     let _ = pending.response_tx.send(None);
                 }
                 self.messages.clear();
                 self.reasoning_content.clear();
                 self.computer_trusted.store(false, Ordering::Relaxed);
+                self.status = components::status::IDLE.into();
+                self.blink = 0;
+                self.scroll_offset = 0;
+                // Drop turn events the aborted task had already queued so
+                // they cannot leak into the fresh conversation.
+                self.drain_stale_turn_events();
                 // Create a new session with a fresh UUID so the AI sees
-                // zero prior context.  DB persistence is preserved.
-                if let Ok(mut s) = self.session.try_write() {
-                    s.reset(&uuid::Uuid::new_v4().to_string());
-                }
+                // zero prior context.  DB persistence is preserved.  Use an
+                // awaited write lock — `try_write` could silently fail and
+                // leave the old context in place.
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async {
+                        let mut s = self.session.write().await;
+                        s.reset(&uuid::Uuid::new_v4().to_string());
+                    })
+                });
             }
             "model" => {
                 let flash = self
@@ -2485,15 +2536,18 @@ pub async fn run(ctx: SharedContext) -> anyhow::Result<()> {
                                 app.character_index = 0;
                             }
                         }
-                    } else if app.status == components::status::IDLE
-                        && app
-                            .task_handle
-                            .as_ref()
-                            .is_none_or(|handle| handle.is_finished())
+                    } else if app.input_buffer.trim() == "/clear"
+                        || (app.status == components::status::IDLE
+                            && app
+                                .task_handle
+                                .as_ref()
+                                .is_none_or(|handle| handle.is_finished()))
                     {
                         // Do not start a second turn while a tool-calling loop
                         // is still running: its tool result would land after
                         // the new user message and break the API message order.
+                        // `/clear` is exempt — it aborts the running turn
+                        // instead of starting a second one.
                         app.submit(tx.clone());
                     }
                     // Non-IDLE or still-running: Enter silently ignored — the
