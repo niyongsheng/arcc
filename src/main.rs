@@ -36,7 +36,7 @@ enum Command {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
-    /// Start background daemon (HTTP + Feishu)
+    /// Start background daemon (HTTP + Feishu / DingTalk)
     Server {
         /// Run as daemon with graceful shutdown
         #[arg(long)]
@@ -233,9 +233,8 @@ async fn main() -> anyhow::Result<()> {
 /// Project instruction filenames in priority order.
 ///
 /// `AGENTS.md` is the cross-agent convention (agents.md). `AGENT.md` is a
-/// common singular variant, and `ARCC.md` is the legacy name kept for
-/// backward compatibility.
-const PROJECT_INSTRUCTION_FILES: &[&str] = &["AGENTS.md", "AGENT.md", "ARCC.md"];
+/// common singular variant.
+const PROJECT_INSTRUCTION_FILES: &[&str] = &["AGENTS.md", "AGENT.md"];
 
 /// Auto-detect project instructions from the nearest ancestor that contains
 /// one, walking up to the `.git` boundary.

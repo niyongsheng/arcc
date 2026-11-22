@@ -1,5 +1,6 @@
 pub mod computer;
 pub mod context;
+pub mod dingtalk_client;
 pub mod feishu_client;
 pub mod mcp;
 pub mod memory;
@@ -9,6 +10,7 @@ pub mod session;
 pub mod system;
 pub mod task;
 pub mod tools;
+pub mod web;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CoreError {

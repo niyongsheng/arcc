@@ -14,7 +14,9 @@ use tracing::{debug, warn};
 
 use super::dsml;
 use super::provider::{ModelError, ModelProvider};
-use super::types::{ChatMessage, ChatRequest, ChatResponse, StreamChunk, ToolCall, Usage};
+use super::types::{
+    ChatMessage, ChatRequest, ChatResponse, Citation, StreamChunk, ToolCall, Usage,
+};
 
 // ---------------------------------------------------------------------------
 // DeepSeek API types (OpenAI-compatible JSON)
@@ -93,7 +95,10 @@ struct ImageUrl {
 struct DeepSeekTool {
     #[serde(rename = "type")]
     tool_type: String,
-    function: DeepSeekFunction,
+    /// Present for `type: "function"` tools; omitted for server-side tools
+    /// such as `{"type": "deepseek_web_search"}`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    function: Option<DeepSeekFunction>,
 }
 
 #[derive(Serialize)]
@@ -129,6 +134,9 @@ struct DeepSeekRespMessage {
     content: String,
     reasoning_content: Option<String>,
     tool_calls: Option<Vec<DeepSeekToolCallResp>>,
+    /// URL citations from server-side web tools.
+    #[serde(default)]
+    annotations: Option<Vec<DeepSeekAnnotation>>,
 }
 
 #[allow(dead_code)]
@@ -172,6 +180,52 @@ struct DeepSeekStreamChoice {
     index: u32,
     #[serde(default)]
     finish_reason: Option<String>,
+    /// Extension field for server-side web tools (`deepseek_web_search` /
+    /// `deepseek_read_url`). One event per chunk at most.
+    #[serde(default)]
+    server_tool_event: Option<DeepSeekServerToolEvent>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, Debug)]
+struct DeepSeekServerToolEvent {
+    #[serde(rename = "type")]
+    event_type: String,
+    #[serde(default)]
+    step: Option<u32>,
+    #[serde(default)]
+    call: Option<DeepSeekServerToolCall>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, Debug)]
+struct DeepSeekServerToolCall {
+    #[serde(rename = "type", default)]
+    tool_type: Option<String>,
+    #[serde(default)]
+    kind: Option<String>,
+    #[serde(default)]
+    action: Option<serde_json::Value>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    error: Option<serde_json::Value>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, Debug)]
+struct DeepSeekAnnotation {
+    #[serde(rename = "type", default)]
+    annotation_type: Option<String>,
+    #[serde(default)]
+    url_citation: Option<DeepSeekUrlCitation>,
+}
+
+#[derive(Deserialize, Debug)]
+struct DeepSeekUrlCitation {
+    url: String,
+    #[serde(default)]
+    title: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -185,6 +239,10 @@ struct DeepSeekStreamDelta {
     reasoning_content: Option<String>,
     #[serde(default)]
     tool_calls: Option<Vec<DeepSeekStreamToolCall>>,
+    /// URL citations for server-side web answers. Delivered once, on the
+    /// final chunk that also carries `finish_reason`.
+    #[serde(default)]
+    annotations: Option<Vec<DeepSeekAnnotation>>,
 }
 
 #[allow(dead_code)]
@@ -322,13 +380,20 @@ impl DeepSeekProvider {
     fn convert_tools(&self, tools: &[super::types::ToolDefinition]) -> Vec<DeepSeekTool> {
         tools
             .iter()
-            .map(|t| DeepSeekTool {
-                tool_type: "function".into(),
-                function: DeepSeekFunction {
-                    name: t.name.clone(),
-                    description: t.description.clone(),
-                    parameters: t.parameters.clone(),
-                    strict: self.strict_mode || t.strict,
+            .map(|t| match &t.builtin {
+                // Server-side tool: only the type is sent.
+                Some(kind) => DeepSeekTool {
+                    tool_type: kind.clone(),
+                    function: None,
+                },
+                None => DeepSeekTool {
+                    tool_type: "function".into(),
+                    function: Some(DeepSeekFunction {
+                        name: t.name.clone(),
+                        description: t.description.clone(),
+                        parameters: t.parameters.clone(),
+                        strict: self.strict_mode || t.strict,
+                    }),
                 },
             })
             .collect()
@@ -475,11 +540,26 @@ impl ModelProvider for DeepSeekProvider {
             }
 
             // Use cleaned content (DSML markup stripped).
-            let display_content = if choice.message.content != clean_content {
+            let mut display_content = if choice.message.content != clean_content {
                 clean_content
             } else {
                 choice.message.content
             };
+
+            // Server-side web tools attach citations to the message. Append
+            // them as Markdown so non-streaming consumers (IM bots, CLI JSON)
+            // surface their sources.
+            if let Some(annotations) = choice.message.annotations {
+                let citations: Vec<Citation> = annotations
+                    .into_iter()
+                    .filter_map(|a| a.url_citation)
+                    .map(|c| Citation {
+                        url: c.url,
+                        title: c.title.unwrap_or_default(),
+                    })
+                    .collect();
+                display_content.push_str(&super::types::citations_markdown(&citations));
+            }
 
             Ok(ChatResponse {
                 message: ChatMessage {
@@ -620,9 +700,38 @@ impl ModelProvider for DeepSeekProvider {
                         };
 
                         for choice in chunk.choices {
+                            let server_event = choice.server_tool_event;
                             let delta = choice.delta;
                             let is_tool_call_finish =
                                 choice.finish_reason.as_deref() == Some("tool_calls");
+
+                            // 0. Server-side web tool progress (DeepSeek
+                            //    executes these itself; surface for the UI).
+                            if let Some(event) = server_event {
+                                let failed = event.call.as_ref().and_then(|c| c.status.as_deref())
+                                    == Some("failed");
+                                let should_emit = event.event_type == "call_started"
+                                    || (event.event_type == "call_completed" && failed);
+                                if should_emit && let Some(call) = event.call {
+                                    let tool = call
+                                        .tool_type
+                                        .clone()
+                                        .unwrap_or_else(|| "server_tool".into());
+                                    let detail = if failed {
+                                        let code = call
+                                            .error
+                                            .as_ref()
+                                            .and_then(|e| e.get("code"))
+                                            .and_then(|c| c.as_str())
+                                            .unwrap_or("unknown");
+                                        format!("failed ({code})")
+                                    } else {
+                                        server_call_detail(call.action.as_ref())
+                                    };
+                                    let _ =
+                                        tx.send(Ok(StreamChunk::ServerTool { tool, detail })).await;
+                                }
+                            }
 
                             // 1. Strip DSML from reasoning content.
                             if let Some(reasoning) = delta.reasoning_content
@@ -726,6 +835,22 @@ impl ModelProvider for DeepSeekProvider {
                                     let _ = tx.send(Ok(StreamChunk::Reasoning(remnant))).await;
                                 }
                             }
+
+                            // 5. URL citations attached to server-side web
+                            //    answers (sent once, with the final chunk).
+                            if let Some(annotations) = delta.annotations {
+                                let citations: Vec<Citation> = annotations
+                                    .into_iter()
+                                    .filter_map(|a| a.url_citation)
+                                    .map(|c| Citation {
+                                        url: c.url,
+                                        title: c.title.unwrap_or_default(),
+                                    })
+                                    .collect();
+                                if !citations.is_empty() {
+                                    let _ = tx.send(Ok(StreamChunk::Citations(citations))).await;
+                                }
+                            }
                         }
 
                         // After choices, check usage → Finish
@@ -755,6 +880,34 @@ impl ModelProvider for DeepSeekProvider {
     fn model_name(&self) -> &str {
         &self.model
     }
+}
+
+/// Compact description of a server-side tool action for progress events.
+fn server_call_detail(action: Option<&serde_json::Value>) -> String {
+    let Some(action) = action else {
+        return String::new();
+    };
+    if let Some(queries) = action.get("queries").and_then(|v| v.as_array()) {
+        let joined = queries
+            .iter()
+            .filter_map(|q| q.as_str())
+            .collect::<Vec<_>>()
+            .join(" · ");
+        if !joined.is_empty() {
+            return joined;
+        }
+    }
+    if let Some(url) = action.get("url").and_then(|v| v.as_str()) {
+        return url.to_owned();
+    }
+    if let Some(pattern) = action.get("pattern").and_then(|v| v.as_str()) {
+        return pattern.to_owned();
+    }
+    action
+        .get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_owned()
 }
 
 // ---------------------------------------------------------------------------
@@ -858,6 +1011,31 @@ mod tests {
             "data:image/png;base64,AAAA"
         );
         assert_eq!(json["content"][1]["image_url"]["detail"], "original");
+    }
+
+    #[test]
+    fn server_tools_serialize_without_function_schema() {
+        let provider = DeepSeekProvider::new("https://api.deepseek.com", "key", "deepseek-flash");
+        let defs = crate::web::server_tool_definitions();
+        let wire = provider.convert_tools(&defs);
+        let json = serde_json::to_value(&wire).unwrap();
+
+        assert_eq!(json[0]["type"], "deepseek_web_search");
+        assert_eq!(json[1]["type"], "deepseek_read_url");
+        assert!(json[0].get("function").is_none());
+        assert!(json[1].get("function").is_none());
+    }
+
+    #[test]
+    fn function_tools_keep_function_schema() {
+        let provider = DeepSeekProvider::new("https://api.deepseek.com", "key", "deepseek-flash");
+        let defs = vec![crate::web::search_tool_definition()];
+        let wire = provider.convert_tools(&defs);
+        let json = serde_json::to_value(&wire).unwrap();
+
+        assert_eq!(json[0]["type"], "function");
+        assert_eq!(json[0]["function"]["name"], "web_search");
+        assert!(json[0]["function"]["parameters"].is_object());
     }
 
     #[test]

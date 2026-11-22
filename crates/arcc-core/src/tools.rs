@@ -48,6 +48,7 @@ pub fn command_tool_definition() -> ToolDefinition {
             "required": ["command", "interactive"]
         }),
         strict: false,
+        builtin: None,
     }
 }
 
@@ -75,13 +76,14 @@ pub fn reply_to_user_definition() -> ToolDefinition {
             "required": ["message"]
         }),
         strict: false,
+        builtin: None,
     }
 }
 
 /// Returns the `schedule_task` tool definition for LLM function calling.
 ///
 /// Allows the AI to schedule a task to run later or on a recurring schedule.
-/// The scheduler runs in the background and re-uses the full feishu processing
+/// The scheduler runs in the background and re-uses the full IM processing
 /// flow (LLM + tool calls) when the task triggers.
 ///
 /// IMPORTANT: For **one-shot** tasks (e.g. "remind me in 5 minutes", "notify
@@ -142,6 +144,7 @@ pub fn schedule_task_definition() -> ToolDefinition {
             "required": ["task"]
         }),
         strict: false,
+        builtin: None,
     }
 }
 
@@ -160,6 +163,7 @@ pub fn get_current_time_definition() -> ToolDefinition {
             "required": []
         }),
         strict: false,
+        builtin: None,
     }
 }
 
@@ -177,6 +181,7 @@ pub fn list_scheduled_tasks_definition() -> ToolDefinition {
             "required": []
         }),
         strict: false,
+        builtin: None,
     }
 }
 
@@ -206,6 +211,7 @@ pub fn use_pro_model_definition() -> ToolDefinition {
             "required": ["reason"]
         }),
         strict: false,
+        builtin: None,
     }
 }
 
@@ -235,6 +241,7 @@ pub fn cancel_scheduled_task_definition() -> ToolDefinition {
             "required": ["task_id", "action"]
         }),
         strict: false,
+        builtin: None,
     }
 }
 

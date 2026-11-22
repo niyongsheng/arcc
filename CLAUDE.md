@@ -37,7 +37,7 @@ ARCC (A Rust Copilot CLI) — 基于 Rust 2024 的终端常驻通用 AI Agent，
 |------|------|----------|
 | **TUI** 交互式终端 | `arcc tui` | ratatui + crossterm + tui-spinner |
 | **CLI** 批处理 / 管道嵌入 | `arcc cli "<prompt>"` | portable-pty |
-| **Server** 后台守护 + 飞书 | `arcc server --daemon` | axum + tokio::signal |
+| **Server** 后台守护 + 飞书 / 钉钉 | `arcc server --daemon` | axum + tokio::signal |
 
 ```bash
 cargo build                    # 编译全部
@@ -66,10 +66,12 @@ arcc/
 │   │   │   ├── tools.rs    # 命令执行（管道 + 交互模式）
 │   │   │   └── lib.rs
 │   │   └── Cargo.toml
-│   ├── arcc-server/        # axum HTTP + 飞书 webhook + SSE
+│   ├── arcc-server/        # axum HTTP + 飞书/钉钉 webhook + SSE
 │   │   ├── src/
 │   │   │   ├── routes/     # /chat, /metrics, /health
-│   │   │   ├── feishu/     # 飞书消息卡片 + 交互回调
+│   │   │   ├── im/         # 平台无关：per-chat 队列 + LLM 工具循环
+│   │   │   ├── feishu/     # 飞书消息卡片 + 交互回调 + 发送后端
+│   │   │   ├── dingtalk/   # 钉钉回调（AES/签名）+ 机器人 API 发送 + 调度执行器
 │   │   │   └── lib.rs
 │   │   └── Cargo.toml
 │   ├── arcc-tui/           # ratatui 终端交互
@@ -105,7 +107,7 @@ arcc/
 
 ## 项目指令文件（AGENTS.md）
 
-ARCC 启动时从当前目录向上查找最近的 `AGENTS.md`（兼容单数 `AGENT.md`；旧名 `ARCC.md` 作为 fallback），读入 `AppContext.project_instructions`，再以 `## Project Instructions` 追加到 TUI/CLI 的 system prompt。TUI 的 `/init` 命令会在仓库根目录生成 `AGENTS.md`。
+ARCC 启动时从当前目录向上查找最近的 `AGENTS.md`（兼容单数 `AGENT.md`），读入 `AppContext.project_instructions`，再以 `## Project Instructions` 追加到 TUI/CLI 的 system prompt。TUI 的 `/init` 命令会在仓库根目录生成 `AGENTS.md`。
 
 ## 核心架构要点
 

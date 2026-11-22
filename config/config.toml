@@ -40,6 +40,21 @@ app_secret = ""
 verification_token = ""
 webhook_path = "/feishu/webhook"
 
+[dingtalk]
+enabled = false
+# 企业内部应用 AppKey / AppSecret（用于主动发消息、定时任务）
+client_id = ""
+client_secret = ""
+# 企业 CorpId（ding 开头），旧版加密回调回复时作为尾部密钥；留空回退到 client_id
+corp_id = ""
+# 机器人编码，留空则回退到 client_id
+robot_code = ""
+# HTTP 回调验签 Token
+token = ""
+# HTTP 回调加密 AES Key（43 位，控制台「消息接收」处获取）
+aes_key = ""
+webhook_path = "/dingtalk/webhook"
+
 [safety]
 # 危险命令：执行这些命令时需要用户确认
 # 不在列表中的命令可以直接执行，无需用户确认
@@ -73,6 +88,27 @@ action_settle_ms = 250
 vision_model = ""
 # 是否把截图保存到 ~/.arcc/screenshots/ 便于调试。
 save_screenshots = false
+
+[web]
+# DeepSeek Web Tools API：网页搜索、网页抓取、OCR。
+# 复用 [model] 的 api_key / api_key_env 与 api_base，按次计费（约 5 元/1000 次）。
+# 关闭后模型不再拥有 web_search / web_fetch / ocr 工具。
+enabled = true
+# 单次 web_search 默认返回条数（1-50）。
+search_count = 5
+# 是否让 web_search 直接返回网页正文（content），更耗 token。
+search_need_content = false
+# 单次工具结果返回给模型的最大字符数。
+max_result_chars = 16000
+# Search / Fetch 请求超时（秒）。
+timeout_seconds = 60
+# OCR 请求超时（秒）；官方允许总时长 180 秒。
+ocr_timeout_seconds = 180
+# OCR 文件大小上限（MiB）；官方上限 100 MiB。
+ocr_max_file_mb = 100
+# 使用服务端联网工具（deepseek_web_search / deepseek_read_url）替代客户端
+# web_search / web_fetch。服务端执行、自带引用，但必须使用 flash_model。
+server_tools = false
 
 [storage]
 # SQLite 数据库路径（相对于 ~/.arcc/）

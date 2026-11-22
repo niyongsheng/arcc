@@ -12,11 +12,15 @@ pub struct ArccConfig {
     #[serde(default)]
     pub feishu: FeishuConfig,
     #[serde(default)]
+    pub dingtalk: DingtalkConfig,
+    #[serde(default)]
     pub safety: SafetyConfig,
     #[serde(default)]
     pub execution: ExecutionConfig,
     #[serde(default)]
     pub computer_use: ComputerUseConfig,
+    #[serde(default)]
+    pub web: WebToolsConfig,
     #[serde(default)]
     pub storage: StorageConfig,
     #[serde(default)]
@@ -82,6 +86,55 @@ pub struct FeishuConfig {
     pub verification_token: String,
     #[serde(default = "default_feishu_webhook_path")]
     pub webhook_path: String,
+}
+
+/// DingTalk (钉钉) enterprise internal robot integration.
+///
+/// Inbound messages arrive via the HTTP callback endpoint (`webhook_path`),
+/// encrypted with `aes_key` and verified with `token`. Outbound replies use
+/// the callback's `sessionWebhook` when available, otherwise the official
+/// robot API authenticated with `client_id` / `client_secret`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DingtalkConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// AppKey of the DingTalk app.
+    #[serde(default)]
+    pub client_id: String,
+    /// AppSecret of the DingTalk app.
+    #[serde(default)]
+    pub client_secret: String,
+    /// Enterprise CorpId (e.g. `dingxxxx`). Used as the trailing key when
+    /// encrypting legacy callback replies. Defaults to `client_id` when empty.
+    #[serde(default)]
+    pub corp_id: String,
+    /// Robot code used by the robot send APIs.
+    /// Defaults to `client_id` when empty.
+    #[serde(default)]
+    pub robot_code: String,
+    /// Callback signature token.
+    #[serde(default)]
+    pub token: String,
+    /// Callback AES key (43 characters, base64 without padding).
+    #[serde(default)]
+    pub aes_key: String,
+    #[serde(default = "default_dingtalk_webhook_path")]
+    pub webhook_path: String,
+}
+
+impl Default for DingtalkConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            client_id: String::new(),
+            client_secret: String::new(),
+            corp_id: String::new(),
+            robot_code: String::new(),
+            token: String::new(),
+            aes_key: String::new(),
+            webhook_path: default_dingtalk_webhook_path(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -179,6 +232,57 @@ impl Default for ComputerUseConfig {
     }
 }
 
+/// DeepSeek Web Tools API settings — Search, Fetch, and OCR.
+///
+/// These tools call `api.deepseek.com/v1/tools/*` directly (billed per
+/// request, see the pricing page).  The API key is taken from `[model]`
+/// (`api_key` first, then the env var named by `api_key_env`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct WebToolsConfig {
+    /// Expose `web_search`, `web_fetch`, and `ocr` as built-in tools.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Default number of search results (1–50, matches the API range).
+    #[serde(default = "default_web_search_count")]
+    pub search_count: u32,
+    /// Ask the Search API to include page bodies (`content` field).
+    /// Off by default — bodies cost tokens; use `web_fetch` on demand.
+    #[serde(default)]
+    pub search_need_content: bool,
+    /// Cap on the JSON returned to the model per tool call (characters).
+    #[serde(default = "default_web_max_result_chars")]
+    pub max_result_chars: usize,
+    /// Timeout for Search / Fetch requests.
+    #[serde(default = "default_web_timeout_seconds")]
+    pub timeout_seconds: u64,
+    /// Timeout for OCR uploads (the API allows up to 180s end to end).
+    #[serde(default = "default_ocr_timeout_seconds")]
+    pub ocr_timeout_seconds: u64,
+    /// Reject OCR files larger than this (the API caps at 100 MiB).
+    #[serde(default = "default_ocr_max_file_mb")]
+    pub ocr_max_file_mb: u64,
+    /// Declare the server-side tools `deepseek_web_search` /
+    /// `deepseek_read_url` instead of the client-side search/fetch tools.
+    /// The model runs them server-side; requires the flash model.
+    #[serde(default)]
+    pub server_tools: bool,
+}
+
+impl Default for WebToolsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            search_count: default_web_search_count(),
+            search_need_content: false,
+            max_result_chars: default_web_max_result_chars(),
+            timeout_seconds: default_web_timeout_seconds(),
+            ocr_timeout_seconds: default_ocr_timeout_seconds(),
+            ocr_max_file_mb: default_ocr_max_file_mb(),
+            server_tools: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct StorageConfig {
     #[serde(default = "default_db_path")]
@@ -238,6 +342,9 @@ fn default_health_path() -> String {
 fn default_feishu_webhook_path() -> String {
     "/feishu/webhook".into()
 }
+fn default_dingtalk_webhook_path() -> String {
+    "/dingtalk/webhook".into()
+}
 fn default_db_path() -> String {
     "arcc.db".into()
 }
@@ -267,6 +374,21 @@ fn default_keep_screenshots() -> usize {
 }
 fn default_action_settle_ms() -> u64 {
     250
+}
+fn default_web_search_count() -> u32 {
+    5
+}
+fn default_web_max_result_chars() -> usize {
+    16_000
+}
+fn default_web_timeout_seconds() -> u64 {
+    60
+}
+fn default_ocr_timeout_seconds() -> u64 {
+    180
+}
+fn default_ocr_max_file_mb() -> u64 {
+    100
 }
 fn default_log_level() -> String {
     "info".into()
@@ -414,5 +536,35 @@ mod tests {
         assert_eq!(config.computer_use.vision_model, "deepseek-flash");
         // Unspecified fields keep their safe defaults.
         assert!(config.computer_use.require_confirmation);
+    }
+
+    #[test]
+    fn web_tools_defaults() {
+        let config = ArccConfig::default();
+        assert!(config.web.enabled);
+        assert_eq!(config.web.search_count, 5);
+        assert!(!config.web.search_need_content);
+        assert_eq!(config.web.max_result_chars, 16_000);
+        assert_eq!(config.web.timeout_seconds, 60);
+        assert_eq!(config.web.ocr_timeout_seconds, 180);
+        assert_eq!(config.web.ocr_max_file_mb, 100);
+        assert!(!config.web.server_tools);
+    }
+
+    #[test]
+    fn parses_web_section() {
+        let config: ArccConfig = toml::from_str(
+            r#"
+            [web]
+            enabled = false
+            search_count = 10
+            server_tools = true
+            "#,
+        )
+        .expect("valid config");
+        assert!(!config.web.enabled);
+        assert_eq!(config.web.search_count, 10);
+        assert!(config.web.server_tools);
+        assert_eq!(config.web.timeout_seconds, 60);
     }
 }

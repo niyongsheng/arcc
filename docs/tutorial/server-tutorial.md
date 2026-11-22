@@ -1,7 +1,7 @@
 # Server 模式教程
 
-ARCC Server 模式是一个 HTTP 后台服务，支持 API 调用和飞书机器人集成。
-它运行在后台（类似 daemon），通过 webhook 接收飞书消息，经 LLM 处理后
+ARCC Server 模式是一个 HTTP 后台服务，支持 API 调用以及飞书 / 钉钉机器人集成。
+它运行在后台（类似 daemon），通过 webhook 接收 IM 消息，经 LLM 处理后
 返回回复，同时支持定时任务调度和持久记忆。
 
 ```bash
@@ -32,6 +32,15 @@ enabled = true                         # 启用飞书机器人
 app_id = "cli_xxxxxxxxxxxx"
 app_secret = "xxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 verification_token = "xxxxxxxxxxxx"
+
+[dingtalk]
+enabled = false                        # 启用钉钉机器人
+client_id = "dingxxxxxxxxxxxxxxxx"     # AppKey
+client_secret = "xxxxxxxxxxxxxxxx"     # AppSecret
+robot_code = ""                        # 留空回退到 client_id
+token = ""                             # 旧版 AES 回调验签 Token
+aes_key = ""                           # 旧版 AES 回调 43 位密钥
+corp_id = ""                           # 企业 CorpId，留空回退到 client_id
 
 [safety]
 require_human_confirm = ["rm", "mv", "dd", "mkfs", "shutdown"]
@@ -107,6 +116,31 @@ curl -X POST localhost:9527/feishu/send \
   -H "Content-Type: application/json" \
   -d '{"open_id":"ou_xxxxxxxx","text":"来自 ARCC 的消息"}'
 ```
+
+### 钉钉 Webhook（需配置 [dingtalk]）
+
+| 端点 | 说明 |
+|------|------|
+| `POST /dingtalk/webhook` | 接收钉钉机器人 HTTP 回调 |
+| `POST /dingtalk/send` | 主动发送消息到钉钉用户 |
+
+```bash
+# 主动发送测试消息（需要 senderStaffId）
+curl -X POST localhost:9527/dingtalk/send \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":"manager1234","text":"来自 ARCC 的消息"}'
+```
+
+钉钉回调支持两种校验方式，按控制台生成的配置自动适配：
+
+- **新版机器人回调**：明文 JSON + `timestamp` / `sign` 请求头，
+  `sign = Base64(HMAC-SHA256(appSecret, timestamp + "\n" + appSecret))`。
+- **旧版事件回调**：`{"encrypt": "..."}` + `msg_signature` 查询参数，
+  AES-256-CBC 解密，签名内容为 `token/timeStamp/nonce/encrypt` 排序后 SHA1。
+
+回复优先使用消息自带的 `sessionWebhook`（无需额外权限）；
+定时任务等延迟消息走官方机器人 API，需要在开发者后台
+开通「企业内机器人发送消息权限」。
 
 ## 飞书机器人功能
 
@@ -208,10 +242,10 @@ curl ... -d '{"session_id":"user-123","prompt":"你还记得我吗？"}'
 
 ## 定时任务调度器
 
-Server 启动时自动启动后台 scheduler（仅飞书模式下）：
+Server 启动时自动启动后台 scheduler（飞书 / 钉钉至少配置一个时）：
 
 - **轮询间隔：** 10 秒
-- **到期触发：** 调用 `process_feishu_chat` 完整执行流程（LLM + 工具 + 回复）
+- **到期触发：** 按任务来源平台路由到对应执行器，走完整流程（LLM + 工具 + 回复）
 - **循环任务：** 自动计算下次执行时间
 - **一次性任务：** 执行后标记完成
 - **会话压缩：** 每小时检查一次超长会话，自动摘要
@@ -258,7 +292,7 @@ vim /etc/systemd/system/arcc.service
 
 ```ini
 [Unit]
-Description=ARCC HTTP&Feishu Server
+Description=ARCC HTTP & IM Server
 After=network.target
 
 [Service]

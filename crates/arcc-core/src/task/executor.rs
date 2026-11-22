@@ -1,5 +1,5 @@
 //! Task executor trait — abstraction over how scheduled tasks are
-//! delivered to the user.  Each channel (Feishu, Slack, etc.)
+//! delivered to the user.  Each channel (Feishu, DingTalk, etc.)
 //! implements this trait so the scheduler never depends on a
 //! specific messaging backend.
 

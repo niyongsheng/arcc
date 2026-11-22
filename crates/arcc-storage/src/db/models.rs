@@ -62,6 +62,9 @@ pub struct MemoryFact {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScheduledTask {
     pub id: String,
+    /// Origin chat platform: `feishu` or `dingtalk`.
+    pub platform: String,
+    /// Platform chat identifier. DingTalk ids are namespaced (`dingtalk:<id>`).
     pub chat_id: String,
     pub chat_type: String,
     pub open_id: String,

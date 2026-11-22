@@ -8,6 +8,7 @@
 //! persisted to the core `Session` (SQLite) exactly like the TUI path.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use futures::StreamExt;
 use serde_json::{Value, json};
@@ -50,12 +51,18 @@ pub async fn run_prompt(
 
     // Model: explicit preference ("pro"/"flash") from set_config_option,
     // else flash (fast chat).
-    let provider = match handle.model_pref.read().await.as_deref() {
+    let mut provider = match handle.model_pref.read().await.as_deref() {
         Some("pro") => ctx.providers.pro(),
         _ => ctx.providers.flash(),
     }
     .cloned()
     .unwrap_or_else(|| panic!("no model provider registered"));
+
+    // Server-side web tools only work with the flash model.
+    let server_tools = ctx.storage.config.web.server_tools;
+    if server_tools && let Some(flash) = ctx.providers.flash() {
+        provider = flash.clone();
+    }
 
     // Persist the user message before anything else — the model must see
     // it and it must survive even if the turn is cancelled mid-flight.
@@ -74,6 +81,18 @@ pub async fn run_prompt(
     let max_bytes = ctx.storage.config.execution.max_output_bytes;
     let skip_permissions = ctx.dangerously_skip_permissions;
 
+    let mut tool_defs = vec![tools::command_tool_definition()];
+    if ctx.storage.config.web.enabled {
+        if !server_tools {
+            tool_defs.push(arcc_core::web::search_tool_definition());
+            tool_defs.push(arcc_core::web::fetch_tool_definition());
+        }
+        tool_defs.push(arcc_core::web::ocr_tool_definition());
+    }
+    if server_tools {
+        tool_defs.extend(arcc_core::web::server_tool_definitions());
+    }
+
     let mut phase = 1;
     let mut usage: Option<Value> = None;
 
@@ -84,7 +103,7 @@ pub async fn run_prompt(
             model: provider.model_name().to_owned(),
             messages,
             tools: if has_tools {
-                Some(vec![tools::command_tool_definition()])
+                Some(tool_defs.clone())
             } else {
                 None
             },
@@ -121,6 +140,7 @@ pub async fn run_prompt(
         let mut content_buf = String::new();
         let mut reasoning_buf = String::new();
         let mut tool_calls: Vec<ToolCall> = Vec::new();
+        let mut citations: Vec<arcc_core::model::types::Citation> = Vec::new();
         let mut last_usage = None;
 
         loop {
@@ -153,6 +173,19 @@ pub async fn run_prompt(
                 }
                 Ok(StreamChunk::ToolCallStart(tc)) => tool_calls.push(tc),
                 Ok(StreamChunk::ToolCallEnd { .. }) => {}
+                Ok(StreamChunk::ServerTool { tool, detail }) => {
+                    // Progress hint for the GUI client.
+                    let text = if detail.is_empty() {
+                        format!("🔎 {tool}")
+                    } else {
+                        format!("🔎 {tool}: {detail}")
+                    };
+                    let _ = outbound.send(protocol::session_update(
+                        &session_id,
+                        protocol::agent_thought_chunk(None, &text),
+                    ));
+                }
+                Ok(StreamChunk::Citations(list)) => citations.extend(list),
                 Ok(StreamChunk::Finish(u)) => {
                     last_usage = Some(u);
                     let (used, size) = {
@@ -181,6 +214,19 @@ pub async fn run_prompt(
                         usage,
                     };
                 }
+            }
+        }
+
+        // Server-side web answers carry citations; append them to the
+        // streamed answer so the client can show sources.
+        if !citations.is_empty() {
+            let block = arcc_core::model::types::citations_markdown(&citations);
+            if !block.is_empty() {
+                content_buf.push_str(&block);
+                let _ = outbound.send(protocol::session_update(
+                    &session_id,
+                    protocol::agent_message_chunk(None, &block),
+                ));
             }
         }
 
@@ -226,6 +272,74 @@ pub async fn run_prompt(
         // Execute tool calls, one by one.
         for tc in &tool_calls {
             info!(tool = %tc.name, id = %tc.id, "executing tool call");
+
+            // Web tools are read-only API calls — no permission prompt.
+            if matches!(
+                tc.name.as_str(),
+                arcc_core::web::SEARCH_TOOL | arcc_core::web::FETCH_TOOL | arcc_core::web::OCR_TOOL
+            ) {
+                let label = arcc_core::web::describe_call(&tc.name, &tc.arguments);
+                let _ = outbound.send(protocol::session_update(
+                    &session_id,
+                    protocol::tool_call_status(&tc.id, &label, "execute", "pending", Some(&label)),
+                ));
+                let _ = outbound.send(protocol::session_update(
+                    &session_id,
+                    protocol::tool_call_update(&tc.id, "in_progress", None),
+                ));
+
+                let started = Instant::now();
+                let result = tokio::select! {
+                    r = arcc_core::web::execute(
+                        &ctx.storage.config.model,
+                        &ctx.storage.config.web,
+                        &tc.name,
+                        &tc.arguments,
+                    ) => r,
+                    _ = cancel.cancelled() => {
+                        info!(%session_id, tool = %tc.id, "prompt cancelled during web tool");
+                        return PromptOutcome { stop_reason: "cancelled".into(), usage };
+                    }
+                };
+                let elapsed_ms = started.elapsed().as_millis() as u64;
+                arcc_core::web::audit(
+                    ctx,
+                    &session_id,
+                    &tc.name,
+                    &tc.arguments,
+                    &result,
+                    elapsed_ms,
+                );
+
+                match result {
+                    Ok(content) => {
+                        let tokens = provider.count_tokens(&content);
+                        let mut s = handle.session.write().await;
+                        s.push_message(ChatMessage::tool_result(tc.id.clone(), content), tokens);
+                        let _ = outbound.send(protocol::session_update(
+                            &session_id,
+                            protocol::tool_call_update(&tc.id, "completed", None),
+                        ));
+                    }
+                    Err(e) => {
+                        let mut s = handle.session.write().await;
+                        s.push_message(
+                            ChatMessage::tool_result(tc.id.clone(), format!("error: {e}")),
+                            0,
+                        );
+                        let _ = outbound.send(protocol::session_update(
+                            &session_id,
+                            protocol::tool_call_update(
+                                &tc.id,
+                                "failed",
+                                Some(json!({ "error": e.to_string() })),
+                            ),
+                        ));
+                    }
+                }
+                continue;
+            }
+
             let command = tc.arguments["command"].as_str().unwrap_or("").to_owned();
 
             let _ = outbound.send(protocol::session_update(

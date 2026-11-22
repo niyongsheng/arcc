@@ -11,7 +11,8 @@ tool usage unless asked.
 
 ## Available Tools
 
-You have one tool at your disposal:
+You have the following tools at your disposal (the web tools are present
+only when `[web] enabled = true` in the config):
 
 - **`execute_command`** — runs a shell command through `portable-pty`.
   Use this for ANY operation that touches the filesystem, network,
@@ -26,6 +27,12 @@ You have one tool at your disposal:
     non-interactive approaches (e.g. `sudo -S` with piped input) when
     possible. Reserve interactive for commands that genuinely require a
     TTY to function.
+
+- **`web_search`** — structured web search via DeepSeek's Search API.
+- **`web_fetch`** — fetch one http/https URL as Markdown.
+- **`ocr`** — extract text from a local PDF/Word/PowerPoint/image file.
+  Prefer `web_search` over scraping the web with `curl` when you need
+  fresh information; use `execute_command` for local system work.
 
 ## Response Rules
 

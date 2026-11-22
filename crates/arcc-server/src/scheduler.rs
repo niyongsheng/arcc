@@ -3,7 +3,7 @@
 //!
 //! The scheduler is spawned on server start and runs for the lifetime of
 //! the process.  It is backend-agnostic — task execution is delegated to a
-//! `TaskExecutor` implementation (Feishu, Slack, etc.).
+//! `TaskExecutor` implementation (Feishu, DingTalk, etc.).
 
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -15,6 +15,7 @@ use tracing::{info, warn};
 
 use arcc_core::context::SharedContext;
 use arcc_core::task::executor::TaskExecutor;
+use arcc_storage::db::models::ScheduledTask;
 
 /// Interval between scheduler ticks (10 seconds).
 const SCHEDULER_TICK: Duration = Duration::from_secs(10);
@@ -139,6 +140,54 @@ pub async fn scheduler_loop(ctx: SharedContext, executor: Arc<dyn TaskExecutor>)
                     warn!(task_id, err = %e, "scheduler: failed to complete task");
                 }
                 info!(task_id, "scheduler: one-shot task completed");
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Platform routing
+// ---------------------------------------------------------------------------
+
+/// Dispatches each due task to the executor registered for its platform.
+///
+/// `ScheduledTask.platform` records where the task was created (Feishu or
+/// DingTalk), so a single scheduler loop can serve every configured backend.
+pub struct RoutingExecutor {
+    executors: HashMap<&'static str, Arc<dyn TaskExecutor>>,
+}
+
+impl RoutingExecutor {
+    pub fn new() -> Self {
+        Self {
+            executors: HashMap::new(),
+        }
+    }
+
+    pub fn register(mut self, platform: &'static str, executor: Arc<dyn TaskExecutor>) -> Self {
+        self.executors.insert(platform, executor);
+        self
+    }
+}
+
+impl Default for RoutingExecutor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait::async_trait]
+impl TaskExecutor for RoutingExecutor {
+    async fn execute(&self, task: &ScheduledTask) -> bool {
+        match self.executors.get(task.platform.as_str()) {
+            Some(executor) => executor.execute(task).await,
+            None => {
+                warn!(
+                    task_id = %task.id,
+                    platform = %task.platform,
+                    "scheduler: no executor registered for platform"
+                );
+                false
             }
         }
     }

@@ -256,11 +256,13 @@ pub fn clear_memories(conn: &Connection, user_id: &str) -> Result<usize> {
 /// Insert a new scheduled task.
 pub fn create_scheduled_task(conn: &Connection, task: &ScheduledTask) -> Result<()> {
     conn.execute(
-        "INSERT INTO scheduled_tasks (id, chat_id, chat_type, open_id, reply_id, reply_id_type,
-                                      cron, task_description, status, next_run_at,
+        "INSERT INTO scheduled_tasks (platform, id, chat_id, chat_type, open_id, reply_id,
+                                      reply_id_type, cron, task_description, status, next_run_at,
                                       created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, datetime('now'), datetime('now'))",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11,
+                 datetime('now'), datetime('now'))",
         params![
+            task.platform,
             task.id,
             task.chat_id,
             task.chat_type,
@@ -279,7 +281,7 @@ pub fn create_scheduled_task(conn: &Connection, task: &ScheduledTask) -> Result<
 /// List all pending tasks whose `next_run_at` has passed, ordered by `next_run_at`.
 pub fn list_due_tasks(conn: &Connection) -> Result<Vec<ScheduledTask>> {
     let mut stmt = conn.prepare(
-        "SELECT id, chat_id, chat_type, open_id, reply_id, reply_id_type,
+        "SELECT platform, id, chat_id, chat_type, open_id, reply_id, reply_id_type,
                 cron, task_description, status, next_run_at, last_run_at, created_at, updated_at
          FROM scheduled_tasks
          WHERE status = 'pending' AND next_run_at <= datetime('now', 'localtime')
@@ -287,19 +289,20 @@ pub fn list_due_tasks(conn: &Connection) -> Result<Vec<ScheduledTask>> {
     )?;
     let rows = stmt.query_map([], |row| {
         Ok(ScheduledTask {
-            id: row.get(0)?,
-            chat_id: row.get(1)?,
-            chat_type: row.get(2)?,
-            open_id: row.get(3)?,
-            reply_id: row.get(4)?,
-            reply_id_type: row.get(5)?,
-            cron: row.get(6)?,
-            task_description: row.get(7)?,
-            status: row.get(8)?,
-            next_run_at: row.get(9)?,
-            last_run_at: row.get(10)?,
-            created_at: Some(row.get(11)?),
-            updated_at: Some(row.get(12)?),
+            platform: row.get(0)?,
+            id: row.get(1)?,
+            chat_id: row.get(2)?,
+            chat_type: row.get(3)?,
+            open_id: row.get(4)?,
+            reply_id: row.get(5)?,
+            reply_id_type: row.get(6)?,
+            cron: row.get(7)?,
+            task_description: row.get(8)?,
+            status: row.get(9)?,
+            next_run_at: row.get(10)?,
+            last_run_at: row.get(11)?,
+            created_at: Some(row.get(12)?),
+            updated_at: Some(row.get(13)?),
         })
     })?;
     rows.collect()
@@ -341,7 +344,7 @@ pub fn update_task_next_run(conn: &Connection, id: &str, next_run_at: &str) -> R
 /// List all active scheduled tasks for a given chat_id, ordered by next run.
 pub fn list_tasks_by_user(conn: &Connection, chat_id: &str) -> Result<Vec<ScheduledTask>> {
     let mut stmt = conn.prepare(
-        "SELECT id, chat_id, chat_type, open_id, reply_id, reply_id_type,
+        "SELECT platform, id, chat_id, chat_type, open_id, reply_id, reply_id_type,
                 cron, task_description, status, next_run_at, last_run_at, created_at, updated_at
          FROM scheduled_tasks
          WHERE chat_id = ?1 AND status IN ('pending', 'running')
@@ -349,19 +352,20 @@ pub fn list_tasks_by_user(conn: &Connection, chat_id: &str) -> Result<Vec<Schedu
     )?;
     let rows = stmt.query_map(params![chat_id], |row| {
         Ok(ScheduledTask {
-            id: row.get(0)?,
-            chat_id: row.get(1)?,
-            chat_type: row.get(2)?,
-            open_id: row.get(3)?,
-            reply_id: row.get(4)?,
-            reply_id_type: row.get(5)?,
-            cron: row.get(6)?,
-            task_description: row.get(7)?,
-            status: row.get(8)?,
-            next_run_at: row.get(9)?,
-            last_run_at: row.get(10)?,
-            created_at: Some(row.get(11)?),
-            updated_at: Some(row.get(12)?),
+            platform: row.get(0)?,
+            id: row.get(1)?,
+            chat_id: row.get(2)?,
+            chat_type: row.get(3)?,
+            open_id: row.get(4)?,
+            reply_id: row.get(5)?,
+            reply_id_type: row.get(6)?,
+            cron: row.get(7)?,
+            task_description: row.get(8)?,
+            status: row.get(9)?,
+            next_run_at: row.get(10)?,
+            last_run_at: row.get(11)?,
+            created_at: Some(row.get(12)?),
+            updated_at: Some(row.get(13)?),
         })
     })?;
     rows.collect()

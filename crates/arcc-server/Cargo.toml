@@ -4,8 +4,8 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Axum HTTP server, Feishu webhook, and SSE endpoints for ARCC"
-keywords = ["axum", "server", "feishu", "sse", "ai"]
+description = "Axum HTTP server, Feishu / DingTalk webhooks, and SSE endpoints for ARCC"
+keywords = ["axum", "server", "feishu", "dingtalk", "sse", "ai"]
 categories = ["web-programming::http-server", "development-tools"]
 
 [dependencies]
@@ -26,5 +26,12 @@ thiserror.workspace = true
 anyhow.workspace = true
 reqwest.workspace = true
 async-trait.workspace = true
+aes.workspace = true
+cbc.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+hmac.workspace = true
+hex.workspace = true
+base64.workspace = true
 arcc-core.workspace = true
 arcc-storage.workspace = true

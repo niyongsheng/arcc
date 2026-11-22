@@ -6,6 +6,7 @@
 
 use serde::Serialize;
 use std::io::{Read, Write};
+use std::time::Instant;
 use tracing::info;
 
 use arcc_core::context::SharedContext;
@@ -68,14 +69,30 @@ pub async fn run(ctx: SharedContext, prompt: &str, json_mode: bool) -> anyhow::R
     }
 
     // --- LLM call with tool support ---
-    let provider = ctx
+    let mut provider = ctx
         .providers
         .pick(prompt, true)
         .ok_or_else(|| anyhow::anyhow!("no model provider available"))?
         .clone();
 
+    // Server-side web tools only work with the flash model.
+    let server_tools = ctx.storage.config.web.server_tools;
+    if server_tools && let Some(flash) = ctx.providers.flash() {
+        provider = flash.clone();
+    }
+
     let skip_permissions = ctx.dangerously_skip_permissions;
-    let tool_def = tools::command_tool_definition();
+    let mut tool_defs = vec![tools::command_tool_definition()];
+    if ctx.storage.config.web.enabled {
+        if !server_tools {
+            tool_defs.push(arcc_core::web::search_tool_definition());
+            tool_defs.push(arcc_core::web::fetch_tool_definition());
+        }
+        tool_defs.push(arcc_core::web::ocr_tool_definition());
+    }
+    if server_tools {
+        tool_defs.extend(arcc_core::web::server_tool_definitions());
+    }
     let temperature = ctx.storage.config.model.temperature;
     let max_tokens = ctx.storage.config.model.max_output_tokens;
 
@@ -105,7 +122,7 @@ pub async fn run(ctx: SharedContext, prompt: &str, json_mode: bool) -> anyhow::R
             model: provider.model_name().to_owned(),
             messages: messages.clone(),
             tools: if has_tools {
-                Some(vec![tool_def.clone()])
+                Some(tool_defs.clone())
             } else {
                 None
             },
@@ -123,6 +140,7 @@ pub async fn run(ctx: SharedContext, prompt: &str, json_mode: bool) -> anyhow::R
 
         let mut tool_calls: Vec<ToolCall> = Vec::new();
         let mut reasoning_buf = String::new();
+        let mut citations: Vec<arcc_core::model::types::Citation> = Vec::new();
 
         match provider.chat_stream(req).await {
             Ok(stream) => {
@@ -146,6 +164,17 @@ pub async fn run(ctx: SharedContext, prompt: &str, json_mode: bool) -> anyhow::R
                         Ok(StreamChunk::ToolCallStart(tc)) => {
                             tool_calls.push(tc);
                         }
+                        Ok(StreamChunk::ServerTool { tool, detail }) => {
+                            if !json_mode {
+                                let text = if detail.is_empty() {
+                                    format!("🔎 {tool}")
+                                } else {
+                                    format!("🔎 {tool}: {detail}")
+                                };
+                                eprintln!("\n{text}");
+                            }
+                        }
+                        Ok(StreamChunk::Citations(list)) => citations.extend(list),
                         Ok(_) => {}
                         Err(e) => {
                             if json_mode {
@@ -188,6 +217,18 @@ pub async fn run(ctx: SharedContext, prompt: &str, json_mode: bool) -> anyhow::R
             }
         }
 
+        // Server-side web answers carry citations; render them as sources.
+        if !citations.is_empty() {
+            let block = arcc_core::model::types::citations_markdown(&citations);
+            if !block.is_empty() {
+                if json_mode {
+                    json_response.push_str(&block);
+                } else {
+                    print!("{block}");
+                }
+            }
+        }
+
         if tool_calls.is_empty() {
             if json_mode {
                 let result = CliResult {
@@ -204,6 +245,79 @@ pub async fn run(ctx: SharedContext, prompt: &str, json_mode: bool) -> anyhow::R
 
         // Execute tool calls and build follow-up messages.
         for tc in &tool_calls {
+            if matches!(
+                tc.name.as_str(),
+                arcc_core::web::SEARCH_TOOL | arcc_core::web::FETCH_TOOL | arcc_core::web::OCR_TOOL
+            ) {
+                let label = arcc_core::web::describe_call(&tc.name, &tc.arguments);
+                if !json_mode {
+                    eprintln!("\n⚡ {label}");
+                }
+
+                messages.push(ChatMessage {
+                    role: "assistant".into(),
+                    content: String::new(),
+                    images: Vec::new(),
+                    tool_calls: Some(vec![tc.clone()]),
+                    tool_call_id: None,
+                    reasoning_content: if reasoning_buf.is_empty() {
+                        None
+                    } else {
+                        Some(reasoning_buf.clone())
+                    },
+                });
+
+                let started = Instant::now();
+                let result = arcc_core::web::execute(
+                    &ctx.storage.config.model,
+                    &ctx.storage.config.web,
+                    &tc.name,
+                    &tc.arguments,
+                )
+                .await;
+                let elapsed_ms = started.elapsed().as_millis() as u64;
+                arcc_core::web::audit(&ctx, "cli", &tc.name, &tc.arguments, &result, elapsed_ms);
+
+                match result {
+                    Ok(content) => {
+                        messages.push(ChatMessage::tool_result(tc.id.clone(), content.clone()));
+                        if json_mode {
+                            json_tool_calls.push(ToolResult {
+                                command: label,
+                                status: "ok".into(),
+                                stdout: content,
+                                stderr: String::new(),
+                                exit_code: None,
+                                error: None,
+                            });
+                        } else {
+                            eprintln!("✓ done");
+                        }
+                    }
+                    Err(e) => {
+                        let err = e.to_string();
+                        messages.push(ChatMessage::tool_result(
+                            tc.id.clone(),
+                            format!("error: {err}"),
+                        ));
+                        if json_mode {
+                            json_status = "partial".into();
+                            json_tool_calls.push(ToolResult {
+                                command: label,
+                                status: "error".into(),
+                                stdout: String::new(),
+                                stderr: String::new(),
+                                exit_code: None,
+                                error: Some(err),
+                            });
+                        } else {
+                            eprintln!("error: {e}");
+                        }
+                    }
+                }
+                continue;
+            }
+
             let command = tc.arguments["command"].as_str().unwrap_or("").to_owned();
 
             if !json_mode {

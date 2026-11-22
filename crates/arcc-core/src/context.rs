@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use crate::dingtalk_client::DingtalkClient;
 use crate::feishu_client::FeishuClient;
 use crate::mcp::scheduler::McpScheduler;
 use crate::memory::MemoryManager;
@@ -15,12 +16,13 @@ pub struct AppContext {
     pub storage: arcc_storage::ArccStorage,
     pub memory: MemoryManager,
     pub feishu_client: Option<FeishuClient>,
+    pub dingtalk_client: Option<DingtalkClient>,
     pub mcp: McpScheduler,
     pub dangerously_skip_permissions: bool,
     /// Runtime command allowlist, modifiable via interactive prompts.
     pub allowlist: RwLock<Allowlist>,
     /// Project-level instructions loaded from the nearest `AGENTS.md`
-    /// (or `AGENT.md` / legacy `ARCC.md`) in the repo tree.
+    /// (or `AGENT.md`) in the repo tree.
     pub project_instructions: RwLock<Option<String>>,
 }
 
@@ -50,12 +52,23 @@ impl AppContext {
             None
         };
 
+        let dingtalk_client = if storage.config.dingtalk.enabled {
+            Some(DingtalkClient::new(
+                storage.config.dingtalk.client_id.clone(),
+                storage.config.dingtalk.client_secret.clone(),
+                storage.config.dingtalk.robot_code.clone(),
+            ))
+        } else {
+            None
+        };
+
         Self {
             providers,
             sessions: SessionManager::with_db(context_max, db),
             storage,
             memory,
             feishu_client,
+            dingtalk_client,
             mcp: McpScheduler::new(),
             dangerously_skip_permissions,
             project_instructions: tokio::sync::RwLock::new(None),

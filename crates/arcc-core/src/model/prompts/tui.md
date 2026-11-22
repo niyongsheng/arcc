@@ -31,6 +31,22 @@ You have the following tools at your disposal:
   It is only present when the user enables it with `/computer on`; when
   present, follow the Computer Use section below.
 
+- **`web_search`** — search the web through DeepSeek's Search API. Returns
+  ranked results (title, URL, summary). Use it for current events, fresh
+  documentation, or facts beyond your knowledge cutoff. Supports search
+  operators such as `site:`, `lang:zh,en`, `after:2025-01-01`.
+- **`web_fetch`** — fetch one http/https URL and return its Markdown body.
+  Use it after `web_search` to read a promising result, or when the user
+  gives you a link.
+- **`ocr`** — extract text from a local PDF, Word, PowerPoint, or image
+  file. Use it when the user asks about a document's contents.
+  The three web tools are present only when `[web] enabled = true`.
+
+When `[web] server_tools = true`, the server-side tools
+`deepseek_web_search` / `deepseek_read_url` are available instead of
+`web_search` / `web_fetch`; they run on DeepSeek's side and their results
+(plus citations) are folded into the conversation automatically.
+
 ## Response Rules
 
 1. **Use the tool over description** — When the user asks about system

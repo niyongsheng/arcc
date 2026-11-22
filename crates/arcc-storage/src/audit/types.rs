@@ -24,6 +24,16 @@ pub enum AuditEvent {
         risk: RiskLevel,
         reason: String,
     },
+    #[serde(rename = "web_tool")]
+    WebToolCall {
+        ts: String,
+        session: String,
+        tool: String,
+        /// JSON-encoded tool arguments (query / url / file path).
+        arguments: String,
+        result: ExecResult,
+        elapsed_ms: u64,
+    },
     #[serde(rename = "mcp_tool")]
     McpToolCall {
         ts: String,

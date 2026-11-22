@@ -11,14 +11,16 @@
            │
            │ executor.execute(&task)   ── TaskExecutor trait
            ▼
-┌──────────────────┐
-│ FeishuExecutor   │  ← 飞书实现（当前唯一实现）
-│ ChatQueue        │  ← 每 chat 串行队列
-└──────────┬───────┘
+┌───────────────────────┐
+│ RoutingExecutor       │  ← 按 task.platform 分发
+│  ├ FeishuExecutor     │
+│  └ DingtalkExecutor   │
+│ ChatQueue (im)        │  ← 每 chat 串行队列
+└──────────┬────────────┘
            │
            ▼
 ┌──────────────────────────────────────┐
-│ process_feishu_chat()               │
+│ im::process_chat()                   │
 │  LLM → tool calls → LLM → 回复用户    │
 └──────────────────────────────────────┘
 ```
@@ -31,7 +33,8 @@
 |------|------|
 | `arcc-core/src/task/executor.rs` | `TaskExecutor` trait 定义 |
 | `arcc-server/src/feishu/executor.rs` | `FeishuTaskExecutor` 实现 |
-| `arcc-server/src/scheduler.rs` | 调度器主循环 |
+| `arcc-server/src/dingtalk/executor.rs` | `DingtalkTaskExecutor` 实现 |
+| `arcc-server/src/scheduler.rs` | 调度器主循环 + `RoutingExecutor` |
 | `arcc-storage/src/db/queries.rs` | SQLite 查询（`list_due_tasks` 等） |
 | `arcc-storage/src/db/models.rs` | `ScheduledTask` 数据模型 |
 | `arcc-core/src/tools.rs` | 工具定义（`schedule_task_definition`） |
@@ -93,7 +96,8 @@ pub trait TaskExecutor: Send + Sync {
 
 **设计原则：**
 - 调度器只依赖 `TaskExecutor` trait，不感知具体消息渠道
-- 每个渠道（飞书、Slack 等）各自实现此 trait
+- 每个渠道（飞书、钉钉等）各自实现此 trait
+- `RoutingExecutor` 按 `ScheduledTask.platform` 路由到对应执行器
 - 新增渠道只需加一个实现文件 + 在 `lib.rs` 里注册
 
 ### 定时任务工具定义
@@ -114,7 +118,7 @@ pub trait TaskExecutor: Send + Sync {
 ③ AI 调 schedule_task(delay_seconds=60, task="提醒用户喝水")
    → INSERT scheduled_tasks (cron=NULL, next_run_at=now+60s)
    → 回复用户 "✅ 已设置"
-④ 60 秒后调度器触发 → 走 FeishuExecutor → LLM 执行并提醒用户
+④ 60 秒后调度器触发 → 按平台走对应 Executor → LLM 执行并提醒用户
 ```
 
 ### 循环任务示例
@@ -146,7 +150,7 @@ pub trait TaskExecutor: Send + Sync {
 
 ### 设计方案
 
-每个 chat（飞书会话）一个 **独立的 tokio mpsc channel + 单消费者**，按 FIFO 顺序逐条处理。
+每个 chat（飞书/钉钉会话）一个 **独立的 tokio mpsc channel + 单消费者**，按 FIFO 顺序逐条处理。
 
 ```
 Chat A 第一条消息 → channel A → 消费者 A → 处理 msg1 → 处理 msg2 → 空闲120s退出
@@ -160,24 +164,30 @@ Chat B 第一条消息 → channel B → 消费者 B → 处理 msg1 → 空闲�
 
 | 文件 | 职责 |
 |------|------|
-| `arcc-server/src/feishu/chat_queue.rs` | ChatQueue 实现 |
-| `arcc-server/src/feishu/webhook.rs` | 用户消息走 ChatQueue.enqueue() |
+| `arcc-server/src/im/mod.rs` | ChatQueue + `process_chat()` 实现 |
+| `arcc-server/src/feishu/webhook.rs` | 飞书用户消息走 ChatQueue.enqueue() |
+| `arcc-server/src/dingtalk/webhook.rs` | 钉钉用户消息走 ChatQueue.enqueue() |
 | `arcc-server/src/feishu/executor.rs` | 调度器触发也走 ChatQueue.enqueue_scheduler() |
+| `arcc-server/src/dingtalk/executor.rs` | 同上（钉钉平台） |
 
 ### 关键数据结构
 
 ```rust
-// chat_queue.rs
+// im/mod.rs
 enum QueueMsg {
     Event(ChatEvent),                    // 普通用户消息
     Scheduler(ChatEvent, oneshot::Sender<bool>),  // 调度器触发 + 结果通知
 }
 
 struct ChatEvent {
-    chat_id: String,
+    platform: &'static str,      // "feishu" / "dingtalk"
+    chat_id: String,             // 钉钉带 "dingtalk:" 前缀
     chat_type: String,
-    open_id: String,
+    user_id: String,
     message_id: String,
+    reply_id: String,
+    reply_id_type: String,
+    session_webhook: Option<String>,  // 钉钉即时回复 URL
     user_text: String,
 }
 
@@ -202,7 +212,7 @@ struct ChatQueue {
 
 ```
 webhook (用户发消息)     ─┐
-                          ├─ ChatQueue.enqueue() → per-chat 消费者 → process_feishu_chat()
+                          ├─ ChatQueue.enqueue() → per-chat 消费者 → im::process_chat()
 scheduler (定时触发)      ─┘
 ```
 

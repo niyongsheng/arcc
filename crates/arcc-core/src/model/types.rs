@@ -136,13 +136,55 @@ pub struct Usage {
     pub completion_tokens: u32,
 }
 
+/// A citation attached to a server-side web answer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Citation {
+    pub url: String,
+    #[serde(default)]
+    pub title: String,
+}
+
+/// Render citations as a Markdown "Sources" block (deduplicated by URL).
+/// Returns an empty string when there is nothing to show.
+pub fn citations_markdown(citations: &[Citation]) -> String {
+    let mut seen = std::collections::HashSet::new();
+    let unique: Vec<&Citation> = citations
+        .iter()
+        .filter(|c| !c.url.is_empty() && seen.insert(c.url.as_str()))
+        .collect();
+    if unique.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("\n\n**Sources**\n");
+    for citation in unique {
+        let title = if citation.title.is_empty() {
+            &citation.url
+        } else {
+            &citation.title
+        };
+        out.push_str(&format!("\n- [{}]({})", title, citation.url));
+    }
+    out
+}
+
 /// Streaming response chunk.
 #[derive(Debug, Clone)]
 pub enum StreamChunk {
     Content(String),
     Reasoning(String),
     ToolCallStart(ToolCall),
-    ToolCallEnd { id: String, output: String },
+    ToolCallEnd {
+        id: String,
+        output: String,
+    },
+    /// A server-side tool (e.g. DeepSeek web search) started running.
+    /// The client does not execute it; this is for progress display.
+    ServerTool {
+        tool: String,
+        detail: String,
+    },
+    /// URL citations attached to the final answer of a server-side tool run.
+    Citations(Vec<Citation>),
     Finish(Usage),
 }
 
@@ -157,4 +199,9 @@ pub struct ToolDefinition {
     /// See: https://api-docs.deepseek.com/guides/tool_calls#strict-mode
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub strict: bool,
+    /// DeepSeek server-side tool type (e.g. `deepseek_web_search`).
+    /// When set, the tool is serialized as `{"type": "<builtin>"}` and is
+    /// executed by the provider instead of the client.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub builtin: Option<String>,
 }

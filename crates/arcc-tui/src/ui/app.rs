@@ -1,5 +1,5 @@
 use arcc_storage::audit::types::{Approval, AuditEvent, ConfirmDecision, ExecResult, RiskLevel};
-use arcc_storage::config::loader::ComputerUseConfig;
+use arcc_storage::config::loader::{ComputerUseConfig, WebToolsConfig};
 use chrono::Utc;
 use crossterm::{
     event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture},
@@ -575,6 +575,7 @@ impl App {
             computer_trusted: Arc::new(AtomicBool::new(false)),
             computer_config: self.ctx.storage.config.computer_use.clone(),
             vision_model: self.vision_model_name(),
+            web_config: self.ctx.storage.config.web.clone(),
         };
         self.task_handle = Some(tokio::spawn(run_tool_calling_loop(
             provider,
@@ -714,6 +715,7 @@ impl App {
             computer_trusted: self.computer_trusted.clone(),
             computer_config: self.ctx.storage.config.computer_use.clone(),
             vision_model: self.vision_model_name(),
+            web_config: self.ctx.storage.config.web.clone(),
         };
         self.task_handle = Some(tokio::spawn(run_tool_calling_loop(
             provider,
@@ -1162,6 +1164,13 @@ fn collect_dashboard_data(ctx: &arcc_core::context::SharedContext) -> components
                 let ts = fmt_local_ts(ts);
                 (ts, format!("mcp {tool}"), ok)
             }
+            arcc_storage::audit::types::AuditEvent::WebToolCall {
+                ts, tool, result, ..
+            } => {
+                let ok = matches!(result, arcc_storage::audit::types::ExecResult::Ok);
+                let ts = fmt_local_ts(ts);
+                (ts, format!("web {tool}"), ok)
+            }
             arcc_storage::audit::types::AuditEvent::HumanConfirm {
                 ts,
                 action,
@@ -1440,6 +1449,8 @@ struct ToolCallLoopConfig {
     computer_config: ComputerUseConfig,
     /// Provider used when the request contains screenshots.
     vision_model: String,
+    /// DeepSeek Search / Fetch / OCR tool settings.
+    web_config: WebToolsConfig,
 }
 
 /// Multi-turn tool-calling stream loop shared by `plan_submit` and `submit`.
@@ -1497,11 +1508,18 @@ async fn run_tool_calling_loop(
         // Screenshots require a vision-capable model. DeepSeek Pro is
         // text-only, so route image-bearing requests to the configured
         // vision provider (Flash by default) and fall back gracefully.
+        let server_tools = has_tools && config.web_config.server_tools;
         let has_images = messages.iter().any(ChatMessage::has_images);
         let active_provider = if has_images {
             ctx.providers
                 .get(&config.vision_model)
                 .or_else(|| ctx.providers.flash())
+                .cloned()
+                .unwrap_or_else(|| provider.clone())
+        } else if server_tools {
+            // DeepSeek server-side web tools require the flash model.
+            ctx.providers
+                .flash()
                 .cloned()
                 .unwrap_or_else(|| provider.clone())
         } else {
@@ -1511,6 +1529,18 @@ async fn run_tool_calling_loop(
         let mut tool_defs = vec![tools::command_tool_definition()];
         if has_tools && computer_active && computer::is_supported() {
             tool_defs.push(computer::tool_definition());
+        }
+        if has_tools && config.web_config.enabled {
+            // With server-side tools the model searches/reads by itself;
+            // keep OCR (no server-side equivalent) on the client.
+            if !server_tools {
+                tool_defs.push(arcc_core::web::search_tool_definition());
+                tool_defs.push(arcc_core::web::fetch_tool_definition());
+            }
+            tool_defs.push(arcc_core::web::ocr_tool_definition());
+        }
+        if server_tools {
+            tool_defs.extend(arcc_core::web::server_tool_definitions());
         }
 
         let req = ChatRequest {
@@ -1542,6 +1572,7 @@ async fn run_tool_calling_loop(
         let mut reasoning_buf = String::new();
         let mut tool_calls: Vec<ToolCall> = Vec::new();
         let mut last_usage: Option<arcc_core::model::types::Usage> = None;
+        let mut citations: Vec<arcc_core::model::types::Citation> = Vec::new();
 
         match active_provider.chat_stream(req).await {
             Ok(stream) => {
@@ -1574,6 +1605,17 @@ async fn run_tool_calling_loop(
                             last_usage = Some(usage);
                         }
                         Ok(StreamChunk::ToolCallEnd { .. }) => {}
+                        Ok(StreamChunk::ServerTool { tool, detail }) => {
+                            let label = if detail.is_empty() {
+                                format!("🔎 {tool}")
+                            } else {
+                                format!("🔎 {tool}: {detail}")
+                            };
+                            let _ = tx.send(AppEvent::ToolExec(label));
+                        }
+                        Ok(StreamChunk::Citations(list)) => {
+                            citations.extend(list);
+                        }
                         Err(e) => {
                             error!(err = %e, "stream error");
                             let _ = tx.send(AppEvent::Token(format!("\n ❌ stream error: {e}")));
@@ -1588,6 +1630,16 @@ async fn run_tool_calling_loop(
                 let _ = tx.send(AppEvent::Token(format!("\n ❌ {e}")));
                 let _ = tx.send(AppEvent::StreamDone);
                 return;
+            }
+        }
+
+        // Server-side web answers carry URL citations; append them as a
+        // Markdown sources block so they are shown and persisted.
+        if !citations.is_empty() {
+            let block = arcc_core::model::types::citations_markdown(&citations);
+            if !block.is_empty() {
+                content_buf.push_str(&block);
+                let _ = tx.send(AppEvent::Token(block));
             }
         }
 
@@ -1763,6 +1815,48 @@ async fn run_tool_calling_loop(
                                 0,
                             );
                             let _ = tx.send(AppEvent::ToolExec(format!("{command}: {e}")));
+                        }
+                    }
+                }
+                arcc_core::web::SEARCH_TOOL
+                | arcc_core::web::FETCH_TOOL
+                | arcc_core::web::OCR_TOOL => {
+                    let label = arcc_core::web::describe_call(&tc.name, &tc.arguments);
+                    let _ = tx.send(AppEvent::ToolExec(label));
+
+                    let started = Instant::now();
+                    let result = arcc_core::web::execute(
+                        &ctx.storage.config.model,
+                        &config.web_config,
+                        &tc.name,
+                        &tc.arguments,
+                    )
+                    .await;
+                    let elapsed_ms = started.elapsed().as_millis() as u64;
+                    let session_id = session.read().await.id.clone();
+                    arcc_core::web::audit(
+                        &ctx,
+                        &session_id,
+                        &tc.name,
+                        &tc.arguments,
+                        &result,
+                        elapsed_ms,
+                    );
+
+                    match result {
+                        Ok(text) => {
+                            let tokens = active_provider.count_tokens(&text);
+                            let mut s = session.write().await;
+                            s.push_message(ChatMessage::tool_result(tc.id.clone(), text), tokens);
+                            let _ = tx.send(AppEvent::ToolExec("✓ done".into()));
+                        }
+                        Err(e) => {
+                            let mut s = session.write().await;
+                            s.push_message(
+                                ChatMessage::tool_result(tc.id.clone(), format!("error: {e}")),
+                                0,
+                            );
+                            let _ = tx.send(AppEvent::ToolExec(format!("✖ {e}")));
                         }
                     }
                 }

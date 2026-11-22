@@ -139,6 +139,7 @@ pub fn tool_definition() -> ToolDefinition {
             "required": ["action"]
         }),
         strict: false,
+        builtin: None,
     }
 }
 

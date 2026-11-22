@@ -47,6 +47,26 @@ pub fn run(conn: &Connection) -> Result<(), rusqlite::Error> {
         conn.pragma_update(None, "user_version", 7)?;
     }
 
+    if version < 8 {
+        info!("running migration v8: add dingtalk platform + session mode");
+        // The original v7 rebuild dropped the `summary` column. Preserve it
+        // when present; databases already at v7 no longer have it.
+        let has_summary = {
+            let mut stmt = conn.prepare("PRAGMA table_info(sessions)")?;
+            let columns = stmt.query_map([], |row| row.get::<_, String>(1))?;
+            columns
+                .collect::<Result<Vec<_>, _>>()?
+                .iter()
+                .any(|c| c == "summary")
+        };
+        conn.execute_batch(if has_summary {
+            MIGRATION_V8
+        } else {
+            MIGRATION_V8_WITHOUT_SUMMARY
+        })?;
+        conn.pragma_update(None, "user_version", 8)?;
+    }
+
     Ok(())
 }
 
@@ -180,6 +200,57 @@ CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_due
     ON scheduled_tasks(status, next_run_at);
 "#;
 
+const MIGRATION_V8: &str = r#"
+-- v8: distinguish scheduled-task origin platforms and allow dingtalk sessions.
+-- Existing tasks predate DingTalk support, so they default to 'feishu'.
+ALTER TABLE scheduled_tasks ADD COLUMN platform TEXT NOT NULL DEFAULT 'feishu';
+
+-- SQLite cannot ALTER CHECK, so sessions is recreated again with 'dingtalk'.
+PRAGMA foreign_keys = OFF;
+
+CREATE TABLE IF NOT EXISTS sessions_v8 (
+    id              TEXT PRIMARY KEY,
+    name            TEXT NOT NULL,
+    mode            TEXT NOT NULL CHECK(mode IN ('tui','cli','server','feishu','acp','dingtalk')),
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    last_active_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    summary         TEXT
+);
+
+INSERT INTO sessions_v8
+    SELECT id, name, mode, created_at, last_active_at, summary
+    FROM sessions;
+
+DROP TABLE sessions;
+ALTER TABLE sessions_v8 RENAME TO sessions;
+
+PRAGMA foreign_keys = ON;
+"#;
+
+/// v8 variant for databases whose sessions table lost `summary` in the
+/// original (buggy) v7 rebuild.
+const MIGRATION_V8_WITHOUT_SUMMARY: &str = r#"
+PRAGMA foreign_keys = OFF;
+
+CREATE TABLE IF NOT EXISTS sessions_v8 (
+    id              TEXT PRIMARY KEY,
+    name            TEXT NOT NULL,
+    mode            TEXT NOT NULL CHECK(mode IN ('tui','cli','server','feishu','acp','dingtalk')),
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    last_active_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    summary         TEXT
+);
+
+INSERT INTO sessions_v8 (id, name, mode, created_at, last_active_at)
+    SELECT id, name, mode, created_at, last_active_at
+    FROM sessions;
+
+DROP TABLE sessions;
+ALTER TABLE sessions_v8 RENAME TO sessions;
+
+PRAGMA foreign_keys = ON;
+"#;
+
 const MIGRATION_V7: &str = r#"
 -- Recreate sessions with 'acp' added to the mode CHECK constraint.
 -- SQLite cannot ALTER CHECK, so we recreate the table. Messages and
@@ -192,11 +263,12 @@ CREATE TABLE IF NOT EXISTS sessions_v7 (
     name            TEXT NOT NULL,
     mode            TEXT NOT NULL CHECK(mode IN ('tui','cli','server','feishu','acp')),
     created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-    last_active_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    last_active_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    summary         TEXT
 );
 
 INSERT INTO sessions_v7
-    SELECT id, name, mode, created_at, last_active_at
+    SELECT id, name, mode, created_at, last_active_at, summary
     FROM sessions;
 
 DROP TABLE sessions;
@@ -204,3 +276,78 @@ ALTER TABLE sessions_v7 RENAME TO sessions;
 
 PRAGMA foreign_keys = ON;
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migrates_to_latest_with_dingtalk_support() {
+        let conn = Connection::open_in_memory().expect("in-memory db");
+        run(&conn).expect("migrations run");
+
+        let version: i32 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .expect("user_version");
+        assert_eq!(version, 8);
+
+        // Sessions accept the new platform mode.
+        conn.execute(
+            "INSERT INTO sessions (id, name, mode) VALUES ('s1', 'dingtalk:cid', 'dingtalk')",
+            [],
+        )
+        .expect("insert dingtalk session");
+
+        // Existing tasks default to feishu; new tasks can select a platform.
+        conn.execute(
+            "INSERT INTO scheduled_tasks
+                (id, chat_id, chat_type, open_id, reply_id, reply_id_type,
+                 task_description, next_run_at)
+             VALUES ('t1', 'c', 'p2p', 'u', 'u', 'open_id', 'task', datetime('now'))",
+            [],
+        )
+        .expect("insert default-platform task");
+        conn.execute(
+            "INSERT INTO scheduled_tasks
+                (id, platform, chat_id, chat_type, open_id, reply_id, reply_id_type,
+                 task_description, next_run_at)
+             VALUES ('t2', 'dingtalk', 'dingtalk:c', 'group', 'u', 'conversation',
+                     'dingtalk_conversation_id', 'task', datetime('now'))",
+            [],
+        )
+        .expect("insert dingtalk task");
+
+        let platform: String = conn
+            .query_row(
+                "SELECT platform FROM scheduled_tasks WHERE id = 't1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("default platform");
+        assert_eq!(platform, "feishu");
+    }
+
+    #[test]
+    fn migrates_from_legacy_v7_without_summary() {
+        // Simulate a database already at v7 whose original rebuild dropped
+        // the `summary` column.
+        let conn = Connection::open_in_memory().expect("in-memory db");
+        conn.execute_batch(MIGRATION_V1).expect("v1 schema");
+        conn.execute_batch(MIGRATION_V5).expect("v5 schema");
+        conn.pragma_update(None, "user_version", 7)
+            .expect("set version");
+
+        run(&conn).expect("v8 migration");
+
+        let version: i32 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .expect("user_version");
+        assert_eq!(version, 8);
+
+        conn.execute(
+            "INSERT INTO sessions (id, name, mode) VALUES ('s1', 'dingtalk:cid', 'dingtalk')",
+            [],
+        )
+        .expect("dingtalk mode accepted");
+    }
+}

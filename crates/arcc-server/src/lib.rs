@@ -1,19 +1,22 @@
+pub mod dingtalk;
 pub mod feishu;
+pub mod im;
 pub mod middleware;
 pub mod routes;
 pub mod scheduler;
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tokio::net::TcpListener;
 use tracing::info;
 
-use std::sync::Arc;
-
 use arcc_core::context::SharedContext;
 
+use crate::dingtalk::executor::DingtalkTaskExecutor;
 use crate::feishu::executor::FeishuTaskExecutor;
+use crate::scheduler::RoutingExecutor;
 
-/// Start the ARCC server (axum HTTP + optional Feishu webhook).
+/// Start the ARCC server (axum HTTP + optional Feishu / DingTalk webhooks).
 pub async fn run(ctx: SharedContext, daemon: bool) -> anyhow::Result<()> {
     let addr: SocketAddr = format!(
         "{}:{}",
@@ -28,10 +31,17 @@ pub async fn run(ctx: SharedContext, daemon: bool) -> anyhow::Result<()> {
         )
     })?;
 
-    // Spawn the background scheduler (only when feishu is configured).
+    // Spawn the background scheduler with an executor per configured platform.
+    let has_platform = ctx.feishu_client.is_some() || ctx.dingtalk_client.is_some();
+    let mut routing = RoutingExecutor::new();
     if ctx.feishu_client.is_some() {
-        let executor = Arc::new(FeishuTaskExecutor::new(ctx.clone()));
-        tokio::spawn(scheduler::scheduler_loop(ctx.clone(), executor));
+        routing = routing.register("feishu", Arc::new(FeishuTaskExecutor::new(ctx.clone())));
+    }
+    if ctx.dingtalk_client.is_some() {
+        routing = routing.register("dingtalk", Arc::new(DingtalkTaskExecutor::new(ctx.clone())));
+    }
+    if has_platform {
+        tokio::spawn(scheduler::scheduler_loop(ctx.clone(), Arc::new(routing)));
     }
 
     let app = build_router(ctx);
@@ -68,9 +78,12 @@ fn build_router(ctx: SharedContext) -> axum::Router {
             "/memory/{user_id}/{key}",
             put(routes::memory::update_memory).delete(routes::memory::delete_memory),
         );
-    // Only add feishu send to protected routes when feishu is configured.
+    // Only add platform send endpoints when the backend is configured.
     if ctx.feishu_client.is_some() {
         protected = protected.route("/feishu/send", post(feishu::webhook::send_handler));
+    }
+    if ctx.dingtalk_client.is_some() {
+        protected = protected.route("/dingtalk/send", post(dingtalk::webhook::send_handler));
     }
     protected = protected.route_layer(middleware::from_fn_with_state(
         ctx.clone(),
@@ -79,11 +92,13 @@ fn build_router(ctx: SharedContext) -> axum::Router {
 
     router = router.merge(protected);
 
-    // Only mount Feishu endpoints when configured.
-    // Webhook uses its own verification_token (no API key required).
-    // `/feishu/send` is added to the protected group below.
+    // Webhooks use their own platform-specific signature/token verification,
+    // so they are mounted outside the API-key-protected group.
     if ctx.feishu_client.is_some() {
         router = router.route("/feishu/webhook", post(feishu::webhook::handler));
+    }
+    if ctx.dingtalk_client.is_some() {
+        router = router.route("/dingtalk/webhook", post(dingtalk::webhook::handler));
     }
 
     router.with_state(ctx)
