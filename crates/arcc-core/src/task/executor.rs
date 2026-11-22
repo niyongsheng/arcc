@@ -13,6 +13,8 @@ use arcc_storage::db::models::ScheduledTask;
 /// convert the `ScheduledTask` into a channel-specific action (e.g.
 /// send a Feishu message, post to Slack, trigger a webhook) and
 /// return `true` on success or `false` on failure.
+// See `ModelProvider`: `async_trait` expansion trips `double_must_use`.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait TaskExecutor: Send + Sync {
     /// Execute a due scheduled task.

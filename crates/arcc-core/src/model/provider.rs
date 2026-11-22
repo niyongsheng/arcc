@@ -8,6 +8,9 @@ use super::types::{ChatRequest, ChatResponse, StreamChunk};
 /// All LLM interactions must go through this trait — never call a
 /// provider API directly.  Adding a new model means implementing
 /// this trait once and registering it in the provider registry.
+// `async_trait` expands `async fn` into a `#[must_use]`-annotated fn returning a
+// boxed future; clippy's `double_must_use` flags the redundant combination.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait ModelProvider: Send + Sync {
     /// Non-streaming chat completion.
