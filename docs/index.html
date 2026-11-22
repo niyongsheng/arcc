@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="ARCC — a local-first terminal AI agent in Rust. TUI, CLI, Server daemon, and ACP backend. MCP &amp; ACP native, powered by DeepSeek-V4.">
   <title>ARCC — A Rust Copilot CLI</title>
   <style>
     :root {
@@ -20,13 +21,18 @@
       --accent2: #5db8a6;
     }
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    html { scroll-behavior: smooth; }
+    html {
+      scroll-behavior: smooth;
+      -webkit-text-size-adjust: 100%;
+      text-size-adjust: 100%;
+    }
     body {
       font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       background: var(--bg);
       color: var(--text);
       line-height: 1.7;
       -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
     }
     ::selection { background: var(--primary); color: #fff; }
 
@@ -67,6 +73,7 @@
       font-family: "JetBrains Mono", monospace;
       font-size: 15px; font-weight: 600;
       color: var(--primary);
+      white-space: nowrap;
     }
     .nav-brand span { color: var(--text); }
     .nav-links { display: flex; gap: 24px; align-items: center; }
@@ -83,6 +90,9 @@
       transition: opacity .2s;
     }
     .nav-links .btn-nav:hover { opacity: .85; color: #fff; }
+
+    /* Mobile nav toggle (hidden on desktop) */
+    .nav-toggle, .nav-burger { display: none; }
 
     /* ── Hero ── */
     .hero {
@@ -161,6 +171,8 @@
       font-size: 13px; line-height: 1.7;
       color: #d4d0c8;
       min-height: 220px;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
     }
     .terminal-body .prompt { color: var(--green); }
     .terminal-body .cmd    { color: var(--text); }
@@ -174,7 +186,7 @@
     @keyframes blink { 50% { opacity: 0; } }
 
     /* ── Section common ── */
-    section { padding: 80px 0; }
+    section { padding: 80px 0; scroll-margin-top: 72px; }
     .section-label {
       font-family: "JetBrains Mono", monospace;
       font-size: 11px; color: var(--primary);
@@ -188,7 +200,7 @@
     /* ── Modes ── */
     .modes-grid {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(2, 1fr);
       gap: 16px;
     }
     .mode-card {
@@ -379,18 +391,27 @@
       line-height: 1.8;
       color: var(--text-muted);
     }
-    .arch-legend .label  { color: var(--text-dim); }
-    .arch-legend .arrow  { color: var(--border); }
-    .arch-legend .pro,
-    .arch-legend .flash { color: var(--primary); }
-    .arch-legend .s-toml,
-    .arch-legend .s-sqlite,
-    .arch-legend .s-jsonl,
-    .arch-legend .s-mem  { color: var(--accent2); }
-    .arch-legend .detail {
-      color: var(--text-muted);
-      margin-left: 2px;
+    .legend-title {
+      color: var(--text-dim);
+      margin-top: 10px;
     }
+    .legend-title:first-child { margin-top: 0; }
+    .legend-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 0 10px;
+      padding-left: 8px;
+    }
+    .legend-row .label  { color: var(--text-dim); min-width: 96px; }
+    .legend-row .arrow  { color: var(--border); }
+    .legend-row .pro,
+    .legend-row .flash { color: var(--primary); }
+    .legend-row .s-toml,
+    .legend-row .s-sqlite,
+    .legend-row .s-jsonl,
+    .legend-row .s-mem  { color: var(--accent2); }
+    .legend-row .detail { color: var(--text-muted); }
 
     /* ── Quick Start ── */
     .code-block {
@@ -413,6 +434,7 @@
       font-size: 13px; line-height: 1.7;
       color: #d4d0c8;
       overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
       white-space: pre;
     }
     .code-block-body .comment { color: var(--text-muted); }
@@ -450,13 +472,178 @@
 
     /* ── Responsive ── */
     @media (max-width: 768px) {
-      .hero-grid { grid-template-columns: 1fr; gap: 40px; }
-      .hero { padding: 120px 0 40px; }
+      .container { padding: 0 18px; }
+      nav .container { padding: 0 18px; }
+
+      /* Header → hamburger menu */
+      .nav-toggle {
+        display: block;
+        position: absolute;
+        opacity: 0;
+        width: 1px; height: 1px;
+      }
+      .nav-burger {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 5px;
+        width: 40px; height: 40px;
+        padding: 0 10px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        cursor: pointer;
+        -webkit-tap-highlight-color: transparent;
+        transition: border-color .2s;
+      }
+      .nav-burger span {
+        display: block;
+        height: 2px;
+        background: var(--text-dim);
+        border-radius: 2px;
+        transition: transform .2s, opacity .2s, background .2s;
+      }
+      .nav-toggle:checked + .nav-burger { border-color: var(--primary); }
+      .nav-toggle:checked + .nav-burger span { background: var(--primary); }
+      .nav-toggle:checked + .nav-burger span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
+      .nav-toggle:checked + .nav-burger span:nth-child(2) { opacity: 0; }
+      .nav-toggle:checked + .nav-burger span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
+      .nav-toggle:focus-visible + .nav-burger { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+      .nav-links {
+        display: none;
+        position: absolute;
+        top: 100%; left: 0; right: 0;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 0;
+        background: var(--bg-elev);
+        border-bottom: 1px solid var(--border);
+        padding: 4px 18px 16px;
+        max-height: calc(100vh - 56px);
+        overflow-y: auto;
+        box-shadow: 0 16px 32px rgba(0,0,0,.45);
+      }
+      .nav-toggle:checked ~ .nav-links { display: flex; }
+      .nav-links a {
+        display: block;
+        padding: 13px 0;
+        font-size: 14px;
+        border-bottom: 1px solid var(--border);
+      }
+      .nav-links a:hover { color: var(--text); }
+      .nav-links .btn-nav {
+        justify-content: center;
+        margin-top: 14px;
+        padding: 12px 16px;
+        border-bottom: none;
+        font-size: 13px;
+      }
+
+      .hero { padding: 104px 0 48px; }
+      .hero-grid { grid-template-columns: 1fr; gap: 36px; }
+      .hero .subtitle { display: block; font-size: 12px; }
+      .hero .subtitle::before { margin-right: 8px; }
+      .hero p { font-size: 15px; max-width: none; margin-bottom: 28px; }
+      .hero-actions { gap: 10px; }
+      .hero-actions .btn { flex: 1 1 140px; justify-content: center; }
+
+      section { padding: 56px 0; scroll-margin-top: 64px; }
+      h2 { font-size: 24px; }
+      .section-desc { margin-bottom: 32px; }
+
+      .terminal-body { padding: 14px; font-size: 12px; }
+      .terminal-body .cursor { width: 7px; height: 13px; }
+
       .modes-grid { grid-template-columns: 1fr; }
+      .mode-card { padding: 22px; }
       .features-grid { grid-template-columns: 1fr; }
-      .install-grid { grid-template-columns: 1fr; }
-      .footer-grid { grid-template-columns: 1fr 1fr; gap: 24px; }
-      nav .nav-links a:not(.btn-nav) { display: none; }
+      .feature-card { padding: 20px 20px 22px; }
+
+      .arch-diagram { padding: 14px; border-radius: 8px; }
+      .arch-crate-box { padding: 12px; }
+      .arch-row { flex-direction: column; }
+      .arch-cell {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 8px 12px;
+        text-align: left;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+      }
+      .arch-cell:last-child { border-bottom: none; }
+      .arch-cell .name { font-size: 12px; }
+      .arch-cell .tech { margin-top: 0; font-size: 9.5px; text-align: right; }
+      .arch-block { padding: 10px 14px; }
+      .arch-block .desc { font-size: 10.5px; }
+      .arch-legend { margin-top: 16px; padding-top: 14px; font-size: 11px; line-height: 1.7; }
+      .legend-row { padding-left: 0; gap: 0 8px; }
+      .legend-row .label { min-width: 76px; }
+      .legend-row .arrow { color: var(--text-muted); }
+
+      .install-grid { grid-template-columns: 1fr; gap: 12px; }
+      .code-block-body {
+        padding: 14px;
+        font-size: 12px;
+        line-height: 1.65;
+        white-space: pre-wrap;
+        overflow-wrap: break-word;
+      }
+
+      footer { padding: 32px 0; margin-top: 16px; }
+      .footer-grid { grid-template-columns: 1fr 1fr; gap: 28px 20px; }
+      .footer-grid > :first-child { grid-column: 1 / -1; }
+      .footer-col a { padding: 3px 0; }
+    }
+
+    @media (max-width: 480px) {
+      .nav-brand { font-size: 14px; }
+      .hero { padding-top: 96px; }
+      .hero h1 { font-size: 30px; }
+      .hero-actions { flex-direction: column; }
+      .hero-actions .btn { flex: none; width: 100%; }
+      .terminal-body { padding: 12px; font-size: 11.5px; }
+      .code-block-body { padding: 12px; font-size: 11.5px; }
+      .footer-grid { gap: 24px 16px; }
+
+      /* Legend: stack label and value instead of wrapping mid-row */
+      .legend-row { display: block; }
+      .legend-row .label { min-width: 0; }
+      .legend-row .arrow { margin: 0 4px; }
+      .legend-row .legend-val { display: block; padding-left: 14px; }
+    }
+
+    @media (max-width: 360px) {
+      .nav-brand span { display: none; }
+      .hero h1 { font-size: 27px; }
+    }
+
+    /* Touch devices: neutralize sticky hover states */
+    @media (hover: none) {
+      .mode-card:hover { transform: none; }
+      .feature-card:hover {
+        transform: none;
+        border-color: var(--border);
+        box-shadow: 4px 4px 0 0 rgba(0,0,0,.4);
+      }
+      .feature-card:hover::before { opacity: 0; }
+      .feature-card:hover .icon {
+        background: rgba(255,87,34,.07);
+        border-color: rgba(255,87,34,.25);
+        box-shadow: 2px 2px 0 0 rgba(0,0,0,.3);
+      }
+      .btn-primary:hover, .btn-secondary:hover { transform: none; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after {
+        animation-duration: .001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: .001ms !important;
+      }
+      .terminal-body .cursor { animation: none; opacity: 1; }
     }
 
     /* ── Animations ── */
@@ -476,6 +663,10 @@
   <nav>
     <div class="container">
       <div class="nav-brand">ARCC <span>/* A Rust Copilot CLI */</span></div>
+      <input type="checkbox" id="nav-toggle" class="nav-toggle" aria-label="Toggle navigation">
+      <label for="nav-toggle" class="nav-burger" aria-hidden="true">
+        <span></span><span></span><span></span>
+      </label>
       <div class="nav-links">
         <a href="#modes">Modes</a>
         <a href="#features">Features</a>
@@ -493,9 +684,9 @@
     <div class="container">
       <div class="hero-grid">
         <div>
-          <div class="subtitle">AI Terminal Agent · Rust 2024 · MCP Native</div>
+          <div class="subtitle">AI Terminal Agent · Rust 2024 · MCP &amp; ACP</div>
           <h1>Your <span class="accent">AI Copilot</span>,<br>always in the terminal</h1>
-          <p>A universal AI agent that lives in your terminal — TUI, CLI, or background daemon. Powered by DeepSeek-V4, wired via MCP, built in Rust.</p>
+          <p>A universal AI agent that lives in your terminal — TUI, CLI, background daemon, or ACP backend for GUI clients. Powered by DeepSeek-V4, built in Rust.</p>
           <div class="hero-actions">
             <a href="#quickstart" class="btn btn-primary">Get Started</a>
             <a href="#modes" class="btn btn-secondary">Explore Modes ↓</a>
@@ -532,8 +723,8 @@
   <section id="modes">
     <div class="container">
       <div class="section-label">/ modes</div>
-      <h2>Three modes, one engine</h2>
-      <p class="section-desc">Same core runtime, three surfaces — pick the interface that fits your workflow.</p>
+      <h2>Four modes, one engine</h2>
+      <p class="section-desc">Same core runtime, four surfaces — pick the interface that fits your workflow.</p>
 
       <div class="modes-grid">
         <div class="mode-card">
@@ -571,6 +762,18 @@
             <span class="mode-tag">metrics</span>
           </div>
         </div>
+
+        <div class="mode-card">
+          <div class="mode-icon"><svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg></div>
+          <h3>ACP — GUI Agent Backend</h3>
+          <p>ACP v1 stdio server for GUI agents like AionUI — streaming replies, shell tool calls, per-command permission prompts, and cancellation over JSON-RPC 2.0.</p>
+          <div class="mode-tags">
+            <span class="mode-tag primary">stdio</span>
+            <span class="mode-tag">JSON-RPC</span>
+            <span class="mode-tag">permissions</span>
+            <span class="mode-tag">GUI agents</span>
+          </div>
+        </div>
       </div>
     </div>
   </section>
@@ -588,12 +791,12 @@
         <div class="feature-card">
           <div class="icon"><svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2A3.5 3.5 0 0 0 6 5.5 3.5 3.5 0 0 0 3.5 9a3.5 3.5 0 0 0 .53 1.85A3.5 3.5 0 0 0 5.5 16a3.5 3.5 0 0 0 5 2.28"/><path d="M14.5 2A3.5 3.5 0 0 1 18 5.5 3.5 3.5 0 0 1 20.5 9a3.5 3.5 0 0 1-.53 1.85A3.5 3.5 0 0 1 18.5 16a3.5 3.5 0 0 1-5 2.28"/><path d="M12 4v6"/><path d="M10 8h4"/><path d="M9 14l3-1.5 3 1.5"/></svg></div>
           <h3>Dual-Model Dispatch</h3>
-          <p>DeepSeek-V4-Pro for complex reasoning &amp; orchestration; V4-Flash for high-frequency dialogue and context compression. Automatic routing based on task complexity.</p>
+          <p>DeepSeek-V4-Pro for complex reasoning &amp; orchestration; V4-Flash for high-frequency dialogue and context compression. Both with 1M context, routed by task complexity.</p>
         </div>
         <div class="feature-card">
           <div class="icon"><svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a6 6 0 0 1-12 0V8z"/><circle cx="12" cy="16" r="1" fill="currentColor"/></svg></div>
-          <h3>MCP Native</h3>
-          <p>Full Model Context Protocol support — stdio and SSE transports. Register any MCP server as a tool provider. Claude Code can call ARCC as an MCP tool.</p>
+          <h3>MCP &amp; ACP Native</h3>
+          <p>Full Model Context Protocol client — stdio and SSE transports. Plus an ACP v1 stdio server, so GUI agents get streaming, tool calls, and permission prompts.</p>
         </div>
         <div class="feature-card">
           <div class="icon"><svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l7 4v5c0 5.25-3.5 10-7 11-3.5-1-7-5.75-7-11V6l7-4z"/><path d="M9 12l2 2 4-4"/></svg></div>
@@ -602,18 +805,38 @@
         </div>
         <div class="feature-card">
           <div class="icon"><svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg></div>
-          <h3>Zero-Dependency Storage</h3>
-          <p>SQLite (bundled, WAL mode) for sessions &amp; messages, TOML for config, JSON Lines for audit. No external databases, no daemons.</p>
+          <h3>Local-First Storage</h3>
+          <p>SQLite (bundled, WAL mode) for sessions &amp; messages, TOML for config, JSON Lines for audit. No external databases, no cloud, no telemetry.</p>
         </div>
         <div class="feature-card">
           <div class="icon"><svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg></div>
           <h3>Context Compression</h3>
-          <p>Automatic token-budget management. When approaching ~8K tokens, the flash model generates a summary — preserving decisions, dropping redundancy.</p>
+          <p>Automatic token-budget management on a 1M-token context. Around 800K tokens the flash model compresses history — preserving decisions, dropping redundancy.</p>
         </div>
         <div class="feature-card">
           <div class="icon"><svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></div>
           <h3>Observability</h3>
           <p>Structured tracing via tokio/tracing, Prometheus metrics export, session replay from SQLite, audit trail in JSON Lines. Debug with confidence.</p>
+        </div>
+        <div class="feature-card">
+          <div class="icon"><svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></div>
+          <h3>Web Search &amp; Fetch</h3>
+          <p>DeepSeek Search API with site:/lang:/date operators, plus Fetch to read any page as Markdown. Optional server-side tools return answers with citations.</p>
+        </div>
+        <div class="feature-card">
+          <div class="icon"><svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M16 3h3a2 2 0 0 1 2 2v3"/><path d="M8 21H5a2 2 0 0 1-2-2v-3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/><line x1="7" y1="12" x2="17" y2="12"/></svg></div>
+          <h3>Document OCR</h3>
+          <p>Per-page text extraction from PDF, Word, PowerPoint, and images via the DeepSeek OCR API — with optional layout recognition for figures and tables.</p>
+        </div>
+        <div class="feature-card">
+          <div class="icon"><svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z"/><path d="M13 13l6 6"/></svg></div>
+          <h3>Computer Use</h3>
+          <p>Desktop control on macOS — screen capture plus mouse and keyboard. Off by default; every input action needs y/a/n confirmation and is written to the audit log.</p>
+        </div>
+        <div class="feature-card">
+          <div class="icon"><svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></div>
+          <h3>Interactive PTY</h3>
+          <p>Commands that need a real TTY — sudo, ssh, vim, htop — are auto-detected or flagged by the model. ARCC steps out of the TUI, hands over stdin, then restores.</p>
         </div>
       </div>
     </div>
@@ -646,6 +869,10 @@
                 <div class="name">arcc-server</div>
                 <div class="tech">axum · Feishu</div>
               </div>
+              <div class="arch-cell">
+                <div class="name">arcc-acp</div>
+                <div class="tech">ACP v1 · stdio</div>
+              </div>
             </div>
           </div>
 
@@ -666,15 +893,33 @@
         </div>
 
         <div class="arch-legend">
-          <span class="label">Model Provider Interface:</span><br>
-          &nbsp;&nbsp;<span class="name core">ModelProvider</span> ← <span class="pro">DeepSeek-V4-Pro</span> <span class="detail">(reasoning)</span><br>
-          &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="flash">DeepSeek-V4-Flash</span> <span class="detail">(dialogue)</span><br>
-          <br>
-          <span class="label">Persistence (embedded, no external services):</span><br>
-          &nbsp;&nbsp;Config &nbsp;→ <span class="s-toml">TOML</span> &nbsp;&nbsp;&nbsp;· ~/.arcc/config.toml<br>
-          &nbsp;&nbsp;Session → <span class="s-sqlite">SQLite</span> &nbsp;· WAL mode, rusqlite bundled<br>
-          &nbsp;&nbsp;Audit &nbsp;&nbsp;→ <span class="s-jsonl">JSONL</span> &nbsp;&nbsp;&nbsp;· append-only, tail-seekable<br>
-          &nbsp;&nbsp;Metrics → <span class="s-mem">Memory</span> &nbsp;&nbsp;· Prometheus scrape endpoint
+          <div class="legend-title">Model Provider Interface:</div>
+          <div class="legend-row">
+            <span class="label">ModelProvider</span>
+            <span class="arrow">←</span>
+            <span class="legend-val"><span class="pro">DeepSeek-V4-Pro</span> <span class="detail">(reasoning)</span><br><span class="flash">DeepSeek-V4-Flash</span> <span class="detail">(dialogue)</span></span>
+          </div>
+          <div class="legend-title">Persistence (embedded, no external services):</div>
+          <div class="legend-row">
+            <span class="label">Config</span>
+            <span class="arrow">→</span>
+            <span class="legend-val"><span class="s-toml">TOML</span> <span class="detail">· ~/.arcc/config.toml</span></span>
+          </div>
+          <div class="legend-row">
+            <span class="label">Session</span>
+            <span class="arrow">→</span>
+            <span class="legend-val"><span class="s-sqlite">SQLite</span> <span class="detail">· WAL mode, rusqlite bundled</span></span>
+          </div>
+          <div class="legend-row">
+            <span class="label">Audit</span>
+            <span class="arrow">→</span>
+            <span class="legend-val"><span class="s-jsonl">JSONL</span> <span class="detail">· append-only, tail-seekable</span></span>
+          </div>
+          <div class="legend-row">
+            <span class="label">Metrics</span>
+            <span class="arrow">→</span>
+            <span class="legend-val"><span class="s-mem">Memory</span> <span class="detail">· Prometheus scrape endpoint</span></span>
+          </div>
         </div>
       </div>
     </div>
@@ -703,8 +948,7 @@ $ echo '<span class="string">[model]</span>' &gt; ~/.arcc/config.toml
 $ <span class="keyword">echo</span> '<span class="string">api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"</span>' &gt;&gt; ~/.arcc/config.toml
 
 <span class="comment"># Start the TUI</span>
-$ <span class="keyword">arcc</span> tui</pre>
-        </div>
+$ <span class="keyword">arcc</span> tui</div>
       </div>
 
       <div class="install-grid">
@@ -717,8 +961,8 @@ $ <span class="keyword">arcc</span> tui</pre>
 <span class="prompt">$</span> <span class="keyword">cargo build</span>                <span class="comment"># Debug build</span>
 <span class="prompt">$</span> <span class="keyword">cargo run</span> -- tui           <span class="comment"># Launch TUI</span>
 <span class="prompt">$</span> <span class="keyword">cargo run</span> -- cli <span class="string">"&lt;prompt&gt;"</span> <span class="comment"># CLI mode</span>
-<span class="prompt">$</span> <span class="keyword">cargo build --release</span>      <span class="comment"># Release build</span></pre>
-          </div>
+<span class="prompt">$</span> <span class="keyword">cargo run</span> -- --acp        <span class="comment"># ACP stdio server</span>
+<span class="prompt">$</span> <span class="keyword">cargo build --release</span>      <span class="comment"># Release build</span></div>
         </div>
 
         <div class="code-block">
@@ -735,13 +979,12 @@ $ <span class="keyword">arcc</span> tui</pre>
       <span class="keyword">"command"</span>: <span class="string">"/path/to/arcc-mcp"</span>
     }
   }
-}</pre>
-          </div>
+}</div>
         </div>
       </div>
 
       <div style="margin-top:16px;text-align:center">
-        <p style="font-size:13px">See <a href="config/config.toml">config/config.toml</a> for all available options &nbsp;·&nbsp; Read the <a href="README.md">README</a></p>
+        <p style="font-size:13px">See <a href="../config/config.toml">config/config.toml</a> for all available options &nbsp;·&nbsp; Read the <a href="../README.md">README</a></p>
       </div>
     </div>
   </section>
@@ -754,30 +997,47 @@ $ <span class="keyword">arcc</span> tui</pre>
       <div class="footer-grid">
         <div>
           <div class="footer-brand">ARCC <span>/* A Rust Copilot CLI */</span></div>
-          <p style="margin-top:8px">A universal AI agent for the terminal. TUI, CLI, and server — one core, three surfaces. MIT licensed.</p>
+          <p style="margin-top:8px">A universal AI agent for the terminal. TUI, CLI, server, and ACP — one core, four surfaces. MIT licensed.</p>
         </div>
         <div class="footer-col">
           <h4>Modes</h4>
           <a href="#modes">TUI</a>
           <a href="#modes">CLI</a>
           <a href="#modes">Server</a>
+          <a href="#modes">ACP</a>
         </div>
         <div class="footer-col">
           <h4>Resources</h4>
           <a href="https://github.com/niyongsheng/arcc">GitHub</a>
           <a href="../README.md">README</a>
           <a href="tutorial/tui-tutorial.md">TUI Tutorial</a>
+          <a href="tutorial/acp-tutorial.md">ACP Tutorial</a>
         </div>
         <div class="footer-col">
           <h4>Stack</h4>
           <a href="https://www.rust-lang.org/" target="_blank">Rust 2024</a>
           <a href="https://platform.deepseek.com/" target="_blank">DeepSeek-V4</a>
           <a href="https://modelcontextprotocol.io/" target="_blank">MCP Protocol</a>
+          <a href="https://github.com/nicepkg/acp" target="_blank">ACP Protocol</a>
         </div>
       </div>
       <p style="margin-top:32px;font-size:11px;color:var(--text-muted)">© 2026 — Built with Rust &amp; DeepSeek</p>
     </div>
   </footer>
+
+  <script>
+    // Mobile menu: close after tapping a link or when leaving the mobile breakpoint
+    (function () {
+      var toggle = document.getElementById('nav-toggle');
+      if (!toggle) return;
+      document.querySelectorAll('.nav-links a').forEach(function (link) {
+        link.addEventListener('click', function () { toggle.checked = false; });
+      });
+      window.addEventListener('resize', function () {
+        if (window.innerWidth > 768) toggle.checked = false;
+      });
+    })();
+  </script>
 
 </body>
 </html>
