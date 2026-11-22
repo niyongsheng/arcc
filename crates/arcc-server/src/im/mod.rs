@@ -54,6 +54,8 @@ pub struct ChatEvent {
 }
 
 /// Transport-specific outbound operations.
+// See `ModelProvider`: `async_trait` expansion trips `double_must_use`.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait ChatBackend: Send + Sync {
     fn platform(&self) -> &'static str;
